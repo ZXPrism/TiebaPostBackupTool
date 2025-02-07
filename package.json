@@ -1,0 +1,20 @@
+{
+  "name": "tiebapostbackuptool",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/main.ts",
+  "scripts": {
+    "build": "npx webpack --mode production && node build.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/jszip": "^3.4.0",
+    "@types/tampermonkey": "^5.0.4",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.7.3",
+    "webpack": "^5.97.1",
+    "webpack-cli": "^6.0.1"
+  }
+}

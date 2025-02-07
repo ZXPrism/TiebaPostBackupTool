@@ -1,0 +1,12 @@
+.vs
+.vscode
+.VSCodeCounter
+.cache
+.xmake
+bin
+build
+out
+bits
+.cph
+dist
+node_modules
