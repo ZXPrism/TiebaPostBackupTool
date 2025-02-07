@@ -19,6 +19,8 @@
 [【百度贴吧贴子备份工具-演示】](https://www.bilibili.com/video/BV1A8NteREva/?share_source=copy_web&vd_source=34d2dac1f41bd4ca259dd99a9bbdc8b2)
 
 ## TODO
+- [ ] 修复换行丢失的问题
+- [ ] 改进图片和文字的混排
 - [ ] 改进 HTML tag 的处理算法（见 [Markdown.ts](./src/Markdown.ts) 函数 `_ResolveTags`）
 - [ ] 改进楼中楼评论的解析算法（目前每层楼最多只能保存十条楼中楼评论）
 - [ ] 支持仅备份指定页
