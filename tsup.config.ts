@@ -28,6 +28,7 @@ export default defineConfig({
 // @connect      gss2.bdstatic.com
 // @connect      gss3.bdstatic.com
 // @connect      gss4.bdstatic.com
+// @connect      gsp0.baidu.com
 // @connect      himg.bdimg.com
 // @connect      tb0.bdstatic.com
 // @connect      tb1.bdstatic.com
