@@ -126,7 +126,7 @@ class DownloadModal {
      */
     public show(post: Post, image_count: number): void {
         this.summary_text.innerHTML = `
-            <div><strong>帖子标题:</strong> ${post.title}</div>
+            <div><strong>贴子标题:</strong> ${post.title}</div>
             <div><strong>贴吧:</strong> ${post.tieba_name}</div>
             <div><strong>楼层:</strong> ${post.floor_list.length}</div>
             <div><strong>回复:</strong> ${post.comment_cnt}</div>
@@ -254,7 +254,7 @@ async function backup_post() {
 
         // Reset button
         if (backup_button) {
-            backup_button.textContent = '备份本帖';
+            backup_button.textContent = '备份本贴';
             backup_button.disabled = false;
         }
 
@@ -275,7 +275,7 @@ async function backup_post() {
         if (backup_button) {
             backup_button.textContent = '备份失败';
             setTimeout(() => {
-                backup_button.textContent = '备份本帖';
+                backup_button.textContent = '备份本贴';
                 backup_button.disabled = false;
             }, 2000);
         }
@@ -309,7 +309,7 @@ function inject_backup_button() {
     // Create backup button
     const backup_button = document.createElement('button');
     backup_button.id = 'tieba-backup-btn';
-    backup_button.textContent = '备份本帖';
+    backup_button.textContent = '备份本贴';
     backup_button.style.cssText = `
         padding: 10px 20px;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);

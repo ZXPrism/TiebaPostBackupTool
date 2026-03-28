@@ -13,9 +13,9 @@
 1. 手动构建，或从 [Greasy Fork](https://greasyfork.org/scripts/526166-tieba-post-backup-tool) 下载脚本。
 2. 使用 [TamperMonkey](https://www.tampermonkey.net/) 安装脚本。
 3. 打开想要备份的贴子。
-4. 打开脚本管理器的菜单。
-5. 点击 `备份当前贴子`，等待备份操作完成。
-6. 完成后，脚本会弹出消息框，提示备份成功。
+4. 点击贴子右上方的 “备份本贴” 按钮。
+5. 等待备份完成。
+6. 如果出现 bug，可点击 ”重置状态“ 按钮。
 
 
 ## FAQ
