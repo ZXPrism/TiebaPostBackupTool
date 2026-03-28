@@ -14,7 +14,7 @@ export default defineConfig({
     js: `// ==UserScript==
 // @name         Tieba Post Backup Tool
 // @namespace    https://github.com/ZXPrism/TiebaPostBackupTool
-// @version      2.0.1
+// @version      2.0.2
 // @description  Automatically backup Tieba posts in one single click
 // @author       ZXPrism
 // @license      MIT
