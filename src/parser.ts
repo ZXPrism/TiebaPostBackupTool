@@ -734,27 +734,37 @@ export class Parser {
                 return this._parse_current_sub_comments(floor_element);
             }
 
+            // Get total page count
+            const total_pages = this._get_sub_comment_page_count(pager);
+            if (total_pages === 0) {
+                // Only one page
+                return this._parse_current_sub_comments(floor_element);
+            }
+
             // Has pagination - need to click through pages
 
-            let current_page = 1;
-            while (true) {
-                // Parse current page
-                const page_comments = this._parse_current_sub_comments(floor_element);
-                all_sub_comments.push(...page_comments);
+            // Parse first page
+            const first_page_comments = this._parse_current_sub_comments(floor_element);
+            all_sub_comments.push(...first_page_comments);
 
-                // Try to find next page button
-                const next_page_link = this._find_next_page_button(floor_element, current_page);
-                if (!next_page_link) {
+            // Click through remaining pages
+            for (let page = 2; page <= total_pages; page++) {
+                // Find and click the page button
+                const page_link = this._find_page_button(floor_element, page);
+                if (!page_link) {
+                    // Can't find the page link, try to continue anyway
                     break;
                 }
 
-                // Click next page
-                next_page_link.click();
+                // Click the page link
+                page_link.click();
 
-                // Wait for DOM to update
+                // Wait for DOM to update before parsing
                 await this._wait_for_dom_update();
 
-                current_page++;
+                // Parse the new page
+                const page_comments = this._parse_current_sub_comments(floor_element);
+                all_sub_comments.push(...page_comments);
             }
 
         } catch {
@@ -763,6 +773,70 @@ export class Parser {
         }
 
         return all_sub_comments;
+    }
+
+    /**
+     * Get total page count from sub-comment pager.
+     */
+    private _get_sub_comment_page_count(pager: Element): number {
+        // Method 1: Look for "尾页" (last page) link
+        const last_page_links = Array.from(pager.querySelectorAll<HTMLAnchorElement>('a'));
+        for (const link of last_page_links) {
+            const text = link.textContent?.trim();
+            if (text === '尾页' || text === 'Last') {
+                const href = link.getAttribute('href');
+                if (href) {
+                    // Extract page number from href (format: #3)
+                    const match = href.match(/#(\d+)/);
+                    if (match) {
+                        return parseInt(match[1]);
+                    }
+                }
+            }
+        }
+
+        // Method 2: Parse all page numbers from link text
+        const page_numbers: number[] = [];
+        const all_links = Array.from(pager.querySelectorAll<HTMLAnchorElement>('a'));
+        for (const link of all_links) {
+            const text = link.textContent?.trim();
+            if (text && /^\d+$/.test(text)) {
+                page_numbers.push(parseInt(text));
+            }
+        }
+
+        if (page_numbers.length > 0) {
+            return Math.max(...page_numbers);
+        }
+
+        return 0;
+    }
+
+    /**
+     * Find specific page button for sub-comment pagination.
+     */
+    private _find_page_button(floor_element: Element, page_num: number): HTMLAnchorElement | null {
+        const pager = floor_element.querySelector('.j_pager');
+        if (!pager) { return null; }
+
+        // Look for page link with href="#{page_num}"
+        const page_links = Array.from(pager.querySelectorAll<HTMLAnchorElement>('a'));
+        for (const link of page_links) {
+            const href = link.getAttribute('href');
+            if (href === `#${page_num}`) {
+                return link;
+            }
+        }
+
+        // Fallback: look for link with page number as text
+        for (const link of page_links) {
+            const text = link.textContent?.trim();
+            if (text === page_num.toString()) {
+                return link;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -785,25 +859,11 @@ export class Parser {
     }
 
     /**
-     * Find next page button for sub-comment pagination.
-     */
-    private _find_next_page_button(floor_element: Element, current_page: number): HTMLAnchorElement | null {
-        const pager = floor_element.querySelector('.j_pager');
-        if (!pager) { return null; }
-
-        // Look for page link with index attribute = current_page + 1
-        const next_page = current_page + 1;
-        const page_links = pager.querySelectorAll<HTMLAnchorElement>(`a[index="${next_page}"]`);
-
-        return page_links.length > 0 ? page_links[0] : null;
-    }
-
-    /**
      * Wait for DOM to update after pagination click.
      */
     private async _wait_for_dom_update(): Promise<void> {
         return new Promise(resolve => {
-            setTimeout(resolve, 500); // Wait 500ms for DOM update
+            setTimeout(resolve, 1000); // Wait 1s for DOM update (increased from 500ms)
         });
     }
 
