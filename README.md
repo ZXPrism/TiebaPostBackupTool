@@ -1,7 +1,5 @@
 # Tieba Post Backup Tool （百度贴吧贴子备份工具）
 
-不定期更新。
-
 [【百度贴吧贴子备份工具-演示】](https://www.bilibili.com/video/BV1A8NteREva/?share_source=copy_web&vd_source=34d2dac1f41bd4ca259dd99a9bbdc8b2)
 
 

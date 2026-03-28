@@ -9,6 +9,34 @@ export default defineConfig({
   sourcemap: false,
   clean: true,
   minify: false,
-  external: ['JSZip'], // Don't bundle JSZip - it'll be provided by Tampermonkey
   target: 'es2020',
+  banner: {
+    js: `// ==UserScript==
+// @name         Tieba Post Backup Tool
+// @namespace    https://github.com/ZXPrism/TiebaPostBackupTool
+// @version      2.0.0
+// @description  Automatically backup Tieba posts in one single click
+// @author       ZXPrism
+// @license      MIT
+// @match        https://tieba.baidu.com/p/*
+// @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
+// @connect      gss0.bdstatic.com
+// @connect      gss1.bdstatic.com
+// @connect      gss2.bdstatic.com
+// @connect      gss3.bdstatic.com
+// @connect      gss4.bdstatic.com
+// @connect      himg.bdimg.com
+// @connect      tb0.bdstatic.com
+// @connect      tb1.bdstatic.com
+// @connect      tb2.bdstatic.com
+// @connect      tiebapic.baidu.com
+// @connect      imgsa.baidu.com
+// @connect      static.tieba.baidu.com
+// @connect      tieba.baidu.com
+// @run-at       document-idle
+// ==/UserScript==`,
+  },
 });

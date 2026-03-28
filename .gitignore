@@ -10,3 +10,4 @@ bits
 .cph
 dist
 node_modules
+test
