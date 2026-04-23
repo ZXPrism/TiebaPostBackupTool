@@ -265,6 +265,18 @@ async function backup_post() {
             return undefined as unknown as Post; // Will navigate, script will reload on next page
         }
 
+        // Store error for debugging
+        if (error instanceof Error) {
+            const error_info = {
+                message: error.message,
+                stack: error.stack,
+                timestamp: new Date().toISOString(),
+                url: window.location.href,
+                user_agent: navigator.userAgent
+            };
+            // Store in Tampermonkey storage
+            (window as unknown as { GM_setValue: (key: string, value: unknown) => void }).GM_setValue('last_error', error_info);
+        }
 
         // Hide modal on error
         if (download_modal) {
@@ -279,6 +291,9 @@ async function backup_post() {
                 backup_button.disabled = false;
             }, 2000);
         }
+
+        // Show view error button
+        show_view_error_button();
 
         throw error;
     }
@@ -417,6 +432,80 @@ function auto_resume_if_needed() {
     }
 
     return false;
+}
+
+/**
+ * Show view error button to help debug issues.
+ */
+function show_view_error_button(): void {
+    // Check if button already exists
+    if (document.getElementById('tieba-view-error-btn')) {
+        return;
+    }
+
+    const container = document.getElementById('tieba-backup-container');
+    if (!container) {
+        return;
+    }
+
+    // Create view error button
+    const error_button = document.createElement('button');
+    error_button.id = 'tieba-view-error-btn';
+    error_button.textContent = '查看错误';
+    error_button.style.cssText = `
+        padding: 8px 16px;
+        background: #ff4444;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: bold;
+        opacity: 0.9;
+    `;
+
+    error_button.addEventListener('click', () => {
+        const error_data = (window as unknown as { GM_getValue: (key: string, default_value: unknown) => unknown }).GM_getValue('last_error', undefined) as {
+            message: string;
+            stack: string;
+            timestamp: string;
+            url: string;
+            user_agent: string;
+        } | undefined;
+
+        if (!error_data) {
+            alert('没有错误信息');
+            return;
+        }
+
+        const error_text = `
+错误信息: ${error_data.message}
+
+时间: ${error_data.timestamp}
+
+页面: ${error_data.url}
+
+浏览器: ${error_data.user_agent}
+
+堆栈:
+${error_data.stack}
+        `.trim();
+
+        alert(error_text);
+    });
+
+    // Insert before reset button
+    const reset_button = document.getElementById('tieba-reset-btn');
+    if (reset_button) {
+        container.insertBefore(error_button, reset_button);
+    } else {
+        container.appendChild(error_button);
+    }
+
+    // Auto-hide after 30 seconds
+    setTimeout(() => {
+        error_button.remove();
+    }, 30000);
 }
 
 // Initialize when DOM is ready
