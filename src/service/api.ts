@@ -1,0 +1,68 @@
+import { createHash } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import type { APIRequestContext } from 'playwright';
+import type { ApiRequest } from '../shared/api-collector';
+
+/** One queue shared across API jobs, including image requests. No retries. */
+export class RequestPacer {
+    private tail: Promise<unknown> = Promise.resolve();
+    private last_start = -Infinity;
+
+    constructor(
+        private readonly interval_ms = 30000,
+        private readonly now: () => number = Date.now,
+        private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void> = async (ms, signal) => { await delay(ms, undefined, { signal }); },
+    ) {}
+
+    run<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+        const result = this.tail.then(async () => {
+            signal.throwIfAborted();
+            const wait = this.last_start + this.interval_ms - this.now();
+            if (wait > 0) { await this.sleep(wait, signal); }
+            signal.throwIfAborted();
+            this.last_start = this.now();
+            return operation();
+        });
+        this.tail = result.catch(() => undefined);
+        return result;
+    }
+}
+
+/** Same form/signature format as the PC site's own HTTP client. */
+export function sign_form(parameters: Record<string, string>): Record<string, string> {
+    const form = { ...parameters, tbs: '', subapp_type: 'pc', _client_type: '20' };
+    const signature = Object.entries(form).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        .map(([key, value]) => `${key}=${value}`).join('') + '36770b1f34c9bbf2e7d1a99d2b82fa9e';
+    return { ...form, sign: createHash('md5').update(signature).digest('hex') };
+}
+
+export function create_api_request(context: APIRequestContext, post_url: string, pacer: RequestPacer, signal: AbortSignal): ApiRequest {
+    return (path, parameters) => pacer.run(async () => {
+        const response = await context.post(`https://tieba.baidu.com${path}`, {
+            form: sign_form(parameters),
+            headers: { Referer: post_url, 'X-Requested-With': 'XMLHttpRequest' },
+            timeout: 30000, maxRedirects: 0, maxRetries: 0,
+        }).catch(error => {
+            // Avoid Playwright's request log, which may include headers/session data.
+            const detail = error instanceof Error ? error.message.split('\n')[0].replace(/^apiRequestContext\.post: /, '') : '未知传输错误';
+            throw new Error(`${path}: 请求失败，${detail}`);
+        });
+        try {
+            if (response.status() !== 200) { throw new Error(`${path}: HTTP ${response.status()}`); }
+            const body = await response.text();
+            let value: unknown;
+            try { value = JSON.parse(body); }
+            catch {
+                const captcha = /<title[^>]*>\s*百度安全验证\s*<\/title>/.test(body);
+                throw new Error(`${path}: ${captcha ? '返回百度安全验证页面' : '响应不是 JSON'}`);
+            }
+            if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new Error(`${path}: JSON 响应应为对象`); }
+            const result = value as Record<string, unknown>;
+            if (result.error_code === undefined) { throw new Error(`${path}: 响应缺少 error_code`); }
+            if (result.error_code !== 0 && result.error_code !== '0') {
+                throw new Error(`${path}: error_code=${String(result.error_code)}${typeof result.error_msg === 'string' ? `，${result.error_msg}` : ''}`);
+            }
+            return result.data ?? result;
+        } finally { await response.dispose(); }
+    }, signal);
+}

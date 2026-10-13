@@ -34,7 +34,8 @@ try {
     const address = server.address();
     const port = address && typeof address !== 'string' ? address.port : config.port;
     const host = config.host.includes(':') ? `[${config.host}]` : config.host;
-    console.log(`贴吧备份服务: http://${host}:${port}（Chromium headless，单任务执行）`);
+    console.log(`贴吧备份服务: http://${host}:${port}（采集后端 ${config.backend}，Chromium headless，单任务执行）`);
+    if (config.backend === 'api') { console.log(`接口及图片请求间隔至少 ${config.api_request_interval_ms / 1000} 秒，不自动重试`); }
 } catch (error) {
     await close();
     throw error;

@@ -6,7 +6,9 @@ import type { PageParser } from '../shared/page-parser';
 import { finalize_post } from '../shared/post';
 import { ImageHandler } from '../image_handler';
 import { allowed_url, has_session, open_browser, restrict_browser } from './browser';
-import { config, project_dir } from './config';
+import { config, project_dir, type Backend } from './config';
+import { collect_api } from '../shared/api-collector';
+import { create_api_request, RequestPacer } from './api';
 import type { Job, Progress } from './model';
 import { prepare_post_page } from './page-readiness';
 
@@ -23,10 +25,11 @@ export interface WorkerResult {
 
 export type Runner = (job: Job, directory: string, progress: (value: Progress) => Promise<void>, signal: AbortSignal) => Promise<WorkerResult>;
 
-async function fetch_image(context: BrowserContext, original: string, post_url: string): Promise<Blob> {
+async function fetch_image(context: BrowserContext, original: string, post_url: string, before_request?: () => Promise<void>): Promise<Blob> {
     let url = new URL(original, post_url).href;
     for (let redirects = 0; redirects < 5; redirects++) {
         if (!allowed_url(url)) { throw new Error('图片地址不在允许的域名内'); }
+        await before_request?.();
         const response = await context.request.get(url, {
             timeout: 30000, maxRedirects: 0, maxRetries: 0, headers: { Referer: post_url },
         });
@@ -51,7 +54,11 @@ async function fetch_image(context: BrowserContext, original: string, post_url: 
 export function create_runner(
     launch: () => Promise<BrowserContext> = open_browser,
     download: typeof fetch_image = fetch_image,
+    backend: Backend = config.backend,
+    pacer = new RequestPacer(config.api_request_interval_ms),
 ): Runner {
+    // Serial queue below also covers image redirects; API jobs stop after the first failed image.
+    let image_tail = Promise.resolve();
     return async (job, directory, progress, signal) => {
         signal.throwIfAborted();
         const context = await launch();
@@ -64,51 +71,70 @@ export function create_runner(
             if (!await has_session(context)) {
                 throw new Error('未找到有效的 BDUSS 登录 Cookie。请先运行 npm run login 或 npm run login:import。');
             }
-            const floors: Floor[] = [];
-            const warnings: string[] = [];
+            let floors: Floor[] = [];
+            let warnings: string[] = [];
             let metadata: Omit<Post, 'floor_list' | 'image_map'> | undefined;
             let total_pages = 1;
-            page = await context.newPage();
-            page.on('dialog', dialog => { void dialog.dismiss(); });
-            for (let number = 1; number <= total_pages; number++) {
-                signal.throwIfAborted();
-                await progress({ stage: '采集帖子', current: number, total: total_pages });
-                const response = await page.goto(`${job.url}?pn=${number}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-                await prepare_post_page(page, response);
-                if (new URL(page.url()).pathname !== `/p/${job.post_id}`
-                    || Number(new URL(page.url()).searchParams.get('pn') || '1') !== number) {
-                    throw new Error(`第 ${number} 页地址不匹配：请求 ${job.url}?pn=${number}，实际 ${page.url()}`);
-                }
-                await page.addScriptTag({ path: join(project_dir, 'dist/service/page.js') });
-                const result = await page.evaluate(async () => {
-                    const parser = new window.TiebaPage.PageParser();
-                    const floors = await parser.parse_current_page();
-                    return { metadata: parser.metadata(), floors, warnings: parser.warnings };
-                });
-                metadata = result.metadata;
-                if (metadata.id !== job.post_id) { throw new Error('页面帖子 ID 不匹配'); }
-                if (number === 1) {
-                    total_pages = metadata.page_cnt;
-                    if (!Number.isInteger(total_pages) || total_pages < 1 || total_pages > config.max_pages) {
-                        throw new Error(`页数无效或超过 ${config.max_pages} 页限制`);
+            if (backend === 'api') {
+                const collection = await collect_api(job.post_id,
+                    create_api_request(context.request, job.url, pacer, signal), progress, signal, config.max_pages);
+                ({ floors, warnings, metadata } = collection);
+                total_pages = metadata.page_cnt;
+            } else {
+                page = await context.newPage();
+                page.on('dialog', dialog => { void dialog.dismiss(); });
+                for (let number = 1; number <= total_pages; number++) {
+                    signal.throwIfAborted();
+                    await progress({ stage: '采集帖子', current: number, total: total_pages });
+                    const response = await page.goto(`${job.url}?pn=${number}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                    await prepare_post_page(page, response);
+                    if (new URL(page.url()).pathname !== `/p/${job.post_id}`
+                        || Number(new URL(page.url()).searchParams.get('pn') || '1') !== number) {
+                        throw new Error(`第 ${number} 页地址不匹配：请求 ${job.url}?pn=${number}，实际 ${page.url()}`);
                     }
-                } else if (metadata.page_cnt !== total_pages) {
-                    warnings.push(`第 ${number} 页显示的总页数发生变化，请重新备份确认内容`);
+                    await page.addScriptTag({ path: join(project_dir, 'dist/service/page.js') });
+                    const result = await page.evaluate(async () => {
+                        const parser = new window.TiebaPage.PageParser();
+                        const floors = await parser.parse_current_page();
+                        return { metadata: parser.metadata(), floors, warnings: parser.warnings };
+                    });
+                    metadata = result.metadata;
+                    if (metadata.id !== job.post_id) { throw new Error('页面帖子 ID 不匹配'); }
+                    if (number === 1) {
+                        total_pages = metadata.page_cnt;
+                        if (!Number.isInteger(total_pages) || total_pages < 1 || total_pages > config.max_pages) {
+                            throw new Error(`页数无效或超过 ${config.max_pages} 页限制`);
+                        }
+                    } else if (metadata.page_cnt !== total_pages) {
+                        warnings.push(`第 ${number} 页显示的总页数发生变化，请重新备份确认内容`);
+                    }
+                    if (!result.floors.length) { throw new Error(`第 ${number} 页未解析到楼层`); }
+                    const seen = new Set(floors.map(floor => floor.index));
+                    if (result.floors.some(floor => seen.has(floor.index))) {
+                        throw new Error(`第 ${number} 页出现重复楼层，停止采集`);
+                    }
+                    floors.push(...result.floors);
+                    warnings.push(...result.warnings.map(message => `第 ${number} 页: ${message}`));
+                    await progress({ stage: '采集帖子', current: number, total: total_pages });
+                    if (number < total_pages) { await page.waitForTimeout(1000); }
                 }
-                if (!result.floors.length) { throw new Error(`第 ${number} 页未解析到楼层`); }
-                const seen = new Set(floors.map(floor => floor.index));
-                if (result.floors.some(floor => seen.has(floor.index))) {
-                    throw new Error(`第 ${number} 页出现重复楼层，停止采集`);
-                }
-                floors.push(...result.floors);
-                warnings.push(...result.warnings.map(message => `第 ${number} 页: ${message}`));
-                await progress({ stage: '采集帖子', current: number, total: total_pages });
-                if (number < total_pages) { await page.waitForTimeout(1000); }
             }
             if (!metadata) { throw new Error('没有采集结果'); }
+            let image_error: unknown;
             const images = new ImageHandler(url => {
                 signal.throwIfAborted();
-                return download(context, url, job.url);
+                if (backend !== 'api') { return download(context, url, job.url); }
+                const result = image_tail.then(async () => {
+                    if (image_error) { throw image_error; }
+                    try {
+                        return await download(context, url, job.url, () => pacer.run(async () => undefined, signal));
+                    } catch (error) {
+                        image_error = new Error(`图片 ${url}: ${error instanceof Error ? error.message : String(error)}`);
+                        throw image_error;
+                    }
+                });
+                image_tail = result.then(() => undefined, () => undefined);
+                return result;
             });
             const post = finalize_post({ ...metadata, page_cnt: total_pages }, floors, images);
             await mkdir(directory, { recursive: true });
@@ -124,13 +150,14 @@ export function create_runner(
             }, signal);
             await updates;
             if (update_error) { throw update_error; }
+            if (image_error) { throw image_error; }
             signal.throwIfAborted();
             warnings.push(...images.failed_images.map(name => `图片下载失败（已用占位图替代）: ${name}`));
             await progress({ stage: '打包文件' });
             const files: Record<string, string | Blob> = {
                 'post.json': JSON.stringify(post, null, 2),
                 'viewer.html': images.create_viewer_html(post),
-                'report.json': JSON.stringify({ warnings, floor_count: floors.length, image_count }, null, 2),
+                'report.json': JSON.stringify({ backend, warnings, floor_count: floors.length, image_count }, null, 2),
             };
             for (const [name, blob] of Object.entries(blobs)) { files[`images/${name}`] = blob; }
             const archive = await images.create_tar(files);
