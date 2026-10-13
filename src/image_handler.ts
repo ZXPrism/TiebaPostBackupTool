@@ -206,9 +206,13 @@ export class ImageHandler {
     /**
      * Create viewer HTML file.
      */
-    public create_viewer_html(post: Post): string {
+    public create_viewer_html(post: Post, backup_date = new Date()): string {
         const json_data = JSON.stringify(post, null, 2).replace(/</g, '\\u003c');
         const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char);
+        const formatted_date = backup_date.toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+        });
 
         return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -237,6 +241,12 @@ export class ImageHandler {
         .header .meta {
             color: #666;
             font-size: 14px;
+        }
+        .header .backup-date {
+            display: block;
+            margin-bottom: 10px;
+            color: #888;
+            font-size: 12px;
         }
         .floor {
             background: white;
@@ -343,6 +353,7 @@ export class ImageHandler {
 <body>
     <div class="header">
         <h1>${escape(post.title)}</h1>
+        <time class="backup-date" datetime="${backup_date.toISOString()}">备份日期：${escape(formatted_date)}（UTC+8）</time>
         <div class="meta">
             贴吧: <a class="author-link" href="${escape(post.tieba_url)}" target="_blank">${escape(post.tieba_name)}</a> |
             楼层: ${post.floor_list.length} |
