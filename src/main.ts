@@ -125,13 +125,12 @@ class DownloadModal {
      * Show modal with summary info
      */
     public show(post: Post, image_count: number): void {
-        this.summary_text.innerHTML = `
-            <div><strong>贴子标题:</strong> ${post.title}</div>
-            <div><strong>贴吧:</strong> ${post.tieba_name}</div>
-            <div><strong>楼层:</strong> ${post.floor_list.length}</div>
-            <div><strong>回复:</strong> ${post.comment_cnt}</div>
-            <div><strong>图片:</strong> ${image_count}</div>
-        `;
+        this.summary_text.replaceChildren();
+        for (const [label, value] of Object.entries({ 贴子标题: post.title, 贴吧: post.tieba_name, 楼层: post.floor_list.length, 回复: post.comment_cnt, 图片: image_count })) {
+            const row = document.createElement('div');
+            row.textContent = `${label}: ${value}`;
+            this.summary_text.append(row);
+        }
         this.modal.style.display = 'flex';
         this.progress_text.textContent = '正在下载图片...';
     }
@@ -161,8 +160,10 @@ class DownloadModal {
     /**
      * Show complete message
      */
-    public show_complete(filename: string): void {
-        this.progress_text.textContent = `✅ 备份完成! 正在下载: ${filename}`;
+    public show_complete(filename: string, warning_count = 0): void {
+        this.progress_text.textContent = warning_count
+            ? `部分完成（${warning_count} 项警告，详见 report.json）。正在下载: ${filename}`
+            : `✅ 备份完成! 正在下载: ${filename}`;
         this.progress_bar.style.width = '100%';
 
         const overlay = document.getElementById('tieba-progress-overlay');
@@ -201,8 +202,7 @@ async function backup_post() {
 
         // Get image handler and show modal
         const image_handler = parser.get_image_handler();
-        // Access private property for image count
-        const image_map = (image_handler as unknown as { image_map: Record<string, string> }).image_map || {};
+        const image_map = post.image_map || {};
         const image_count = Object.keys(image_map).length;
         download_modal.show(post, image_count);
 
@@ -218,11 +218,13 @@ async function backup_post() {
 
         // Create JSON data
         const json_data = JSON.stringify(post, null, 2);
+        const warnings = [...parser.get_warnings(), ...image_handler.failed_images.map(name => `图片下载失败（已用占位图替代）: ${name}`)];
 
         // Package everything into tar
         const files: { [filename: string]: string | Blob } = {
             'post.json': json_data,
             'viewer.html': viewer_html,
+            'report.json': JSON.stringify({ warnings, floor_count: post.floor_list.length, image_count }, null, 2),
         };
 
         // Add image files with images/ prefix
@@ -237,7 +239,7 @@ async function backup_post() {
 
         // Show complete message
         if (download_modal) {
-            download_modal.show_complete(filename);
+            download_modal.show_complete(filename, warnings.length);
         }
 
         // Small delay before actual download
@@ -275,7 +277,7 @@ async function backup_post() {
                 user_agent: navigator.userAgent
             };
             // Store in Tampermonkey storage
-            (window as unknown as { GM_setValue: (key: string, value: unknown) => void }).GM_setValue('last_error', error_info);
+            GM_setValue('last_error', error_info);
         }
 
         // Hide modal on error
@@ -465,7 +467,7 @@ function show_view_error_button(): void {
     `;
 
     error_button.addEventListener('click', () => {
-        const error_data = (window as unknown as { GM_getValue: (key: string, default_value: unknown) => unknown }).GM_getValue('last_error', undefined) as {
+        const error_data = GM_getValue('last_error', undefined) as {
             message: string;
             stack: string;
             timestamp: string;

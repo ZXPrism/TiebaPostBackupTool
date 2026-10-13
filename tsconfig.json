@@ -1,14 +1,17 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "ES2020",
-    "lib": ["ES2020", "DOM"],
+    "module": "ESNext",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "allowJs": false,
     "checkJs": false,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "removeComments": false,
     "noEmit": false,
     "importHelpers": true,
@@ -28,6 +31,14 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*",
+    "scripts/**/*",
+    "tests/**/*",
+    "tsup*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

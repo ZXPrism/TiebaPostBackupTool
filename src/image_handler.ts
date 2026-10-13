@@ -3,6 +3,13 @@ import { Post, ImageMap, Floor, Comment } from './types';
 export class ImageHandler {
     private image_map: ImageMap = {};
     private image_counter: number = 1;
+    public readonly failed_images: string[] = [];
+
+    constructor(
+        private readonly fetch_image?: (url: string) => Promise<Blob>,
+        image_map: ImageMap = {},
+    ) { this.image_map = { ...image_map }; }
+
 
     /**
      * Extract all image URLs from post content and avatars.
@@ -74,7 +81,8 @@ export class ImageHandler {
      * Download all images as blobs with batching to prevent IP ban.
      * @param on_progress Callback for progress updates (current, total, filename)
      */
-    public async download_images(on_progress?: (current: number, total: number, filename: string) => void): Promise<{ [filename: string]: Blob }> {
+    public async download_images(on_progress?: (current: number, total: number, filename: string) => void, signal?: AbortSignal): Promise<{ [filename: string]: Blob }> {
+        this.failed_images.length = 0;
         const blobs: { [filename: string]: Blob } = {};
         const entries = Object.entries(this.image_map);
         const total = entries.length;
@@ -85,6 +93,7 @@ export class ImageHandler {
         const BATCH_DELAY = 1000; // 1 second between batches
 
         for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+            signal?.throwIfAborted();
             const batch = entries.slice(i, Math.min(i + BATCH_SIZE, entries.length));
 
             // Download batch in parallel
@@ -97,6 +106,7 @@ export class ImageHandler {
                         on_progress(current, total, new_name);
                     }
                 } catch {
+                    this.failed_images.push(new_name);
                     // Create a placeholder image for failed downloads
                     blobs[new_name] = this._create_placeholder(new_name);
                     current++;
@@ -119,6 +129,7 @@ export class ImageHandler {
      * Fetch single image as blob using GM_xmlhttpRequest to bypass CORS.
      */
     private async _fetch_image(url: string): Promise<Blob> {
+        if (this.fetch_image) { return this.fetch_image(url); }
         return new Promise((resolve, reject) => {
             // Check if GM_xmlhttpRequest is available (Tampermonkey)
             if (typeof GM_xmlhttpRequest !== 'undefined') {
@@ -130,6 +141,8 @@ export class ImageHandler {
                     method: 'GET',
                     url: url,
                     responseType: 'blob',
+                    timeout: 30000,
+                    ontimeout: () => reject(new Error('Image download timed out')),
                     onload: (response: GMResponse) => {
                         if (response.status === 200) {
                             resolve(response.response);
@@ -143,7 +156,7 @@ export class ImageHandler {
                 });
             } else {
                 // Fallback to regular fetch (may fail due to CORS)
-                fetch(url)
+                fetch(url, { signal: AbortSignal.timeout(30000) })
                     .then(response => {
                         if (!response.ok) {
                             throw new Error(`HTTP ${response.status}`);
@@ -194,14 +207,15 @@ export class ImageHandler {
      * Create viewer HTML file.
      */
     public create_viewer_html(post: Post): string {
-        const json_data = JSON.stringify(post, null, 2);
+        const json_data = JSON.stringify(post, null, 2).replace(/</g, '\\u003c');
+        const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char);
 
         return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${post.title} - Tieba Backup</title>
+    <title>${escape(post.title)} - Tieba Backup</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -328,9 +342,9 @@ export class ImageHandler {
 </head>
 <body>
     <div class="header">
-        <h1>${post.title}</h1>
+        <h1>${escape(post.title)}</h1>
         <div class="meta">
-            贴吧: <a class="author-link" href="${post.tieba_url}" target="_blank">${post.tieba_name}</a> |
+            贴吧: <a class="author-link" href="${escape(post.tieba_url)}" target="_blank">${escape(post.tieba_name)}</a> |
             楼层: ${post.floor_list.length} |
             回复: ${post.comment_cnt}
         </div>
@@ -341,31 +355,65 @@ export class ImageHandler {
         try {
             const post = ${json_data};
 
+            function escapeText(value) {
+                const span = document.createElement('span');
+                span.textContent = String(value ?? '');
+                return span.innerHTML.replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+            }
+
+            function safeUrl(value) {
+                try {
+                    const url = new URL(value);
+                    return ['https:', 'http:'].includes(url.protocol) ? url.href : '#';
+                } catch { return '#'; }
+            }
+
+            function safeLink(value) { return escapeText(safeUrl(value)); }
+
+            function safeContent(value) {
+                const template = document.createElement('template');
+                template.innerHTML = value;
+                template.content.querySelectorAll('script,iframe,object,embed,svg,math,style,link,meta,base,form,input,button,textarea').forEach(el => el.remove());
+                template.content.querySelectorAll('*').forEach(el => {
+                    for (const attribute of Array.from(el.attributes)) {
+                        if (!['href', 'src', 'alt', 'title', 'width', 'height'].includes(attribute.name)) {
+                            el.removeAttribute(attribute.name);
+                        }
+                    }
+                    if (el.hasAttribute('href')) { el.setAttribute('href', safeUrl(el.getAttribute('href'))); }
+                    if (el.hasAttribute('src')) {
+                        const src = el.getAttribute('src');
+                        if (!src.startsWith('./images/') || src.includes('..', 2)) { el.removeAttribute('src'); }
+                    }
+                });
+                return template.innerHTML;
+            }
+
             function renderFloor(floor) {
             let html = '<div class="floor">';
 
             // Floor index
-            html += '<div class="floor-index">' + floor.index + '楼</div>';
+            html += '<div class="floor-index">' + escapeText(floor.index) + '楼</div>';
 
             // Author with avatar
             html += '<div class="author-line">';
             if (floor.comment.avatar_url) {
-                html += '<img class="avatar" src="./images/' + floor.comment.avatar_url + '" alt="">';
+                html += '<img class="avatar" src="./images/' + escapeText(floor.comment.avatar_url) + '" alt="">';
             }
             // Author as link if homepage exists
             if (floor.comment.homepage_url) {
-                html += '<a class="author-link" href="' + floor.comment.homepage_url + '" target="_blank">' + floor.comment.author + '</a>';
+                html += '<a class="author-link" href="' + safeLink(floor.comment.homepage_url) + '" target="_blank">' + escapeText(floor.comment.author) + '</a>';
             } else {
-                html += '<span class="author">' + floor.comment.author + '</span>';
+                html += '<span class="author">' + escapeText(floor.comment.author) + '</span>';
             }
-            html += '<span class="date">' + floor.comment.date + '</span>';
+            html += '<span class="date">' + escapeText(floor.comment.date) + '</span>';
             if (floor.comment.ip_location) {
-                html += '<span class="ip">来自: ' + floor.comment.ip_location + '</span>';
+                html += '<span class="ip">来自: ' + escapeText(floor.comment.ip_location) + '</span>';
             }
             html += '</div>';
 
             // Content
-            html += '<div class="content">' + floor.comment.content + '</div>';
+            html += '<div class="content">' + safeContent(floor.comment.content) + '</div>';
 
             // Sub-comments
             if (floor.sub_comment_list && floor.sub_comment_list.length > 0) {
@@ -385,7 +433,7 @@ export class ImageHandler {
 
             // Avatar
             if (comment.avatar_url) {
-                html += '<img class="sub-avatar" src="./images/' + comment.avatar_url + '" alt="">';
+                html += '<img class="sub-avatar" src="./images/' + escapeText(comment.avatar_url) + '" alt="">';
             }
 
             // Debug logging
@@ -395,11 +443,11 @@ export class ImageHandler {
             // Author with fallback for missing names, as link if homepage exists
             const author_name = comment.author || '未知用户';
             if (comment.homepage_url) {
-                html += '<a class="author-link" href="' + comment.homepage_url + '" target="_blank">' + author_name + '</a>';
+                html += '<a class="author-link" href="' + safeLink(comment.homepage_url) + '" target="_blank">' + escapeText(author_name) + '</a>';
             } else {
-                html += '<span class="author">' + author_name + '</span>';
+                html += '<span class="author">' + escapeText(author_name) + '</span>';
             }
-            html += '<span class="date">' + comment.date + '</span>';
+            html += '<span class="date">' + escapeText(comment.date) + '</span>';
 
             // Content with reply-to filtering
             let content = comment.content;
@@ -417,15 +465,15 @@ export class ImageHandler {
                     }
                 }
             }
-            html += '<div class="content">' + content + '</div>';
+            html += '<div class="content">' + safeContent(content) + '</div>';
 
             // Reply-to information
             if (comment.reply_to_author) {
                 html += '<div class="reply-to">回复 ';
                 if (comment.reply_to_homepage_url) {
-                    html += '<a href="' + comment.reply_to_homepage_url + '" target="_blank">' + comment.reply_to_author + '</a>';
+                    html += '<a href="' + safeLink(comment.reply_to_homepage_url) + '" target="_blank">' + escapeText(comment.reply_to_author) + '</a>';
                 } else {
-                    html += comment.reply_to_author;
+                    html += escapeText(comment.reply_to_author);
                 }
                 html += '</div>';
             }
@@ -446,7 +494,7 @@ export class ImageHandler {
             });
         }
         } catch (error) {
-            document.getElementById('content').innerHTML = '<p style="color: red; padding: 20px;">Error rendering post: ' + error.message + '</p>';
+            document.getElementById('content').innerHTML = '<p style="color: red; padding: 20px;">Error rendering post: ' + escapeText(error.message) + '</p>';
         }
     </script>
 </body>

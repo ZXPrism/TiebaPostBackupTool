@@ -40,4 +40,5 @@ export interface ParseState {
     total_pages: number;       // Total pages to parse
     collected_floors: Floor[]; // Accumulated floor data from all pages
     timestamp: number;         // When parsing started (for timeout check)
+    warnings?: string[];       // Diagnostics only; not part of post.json
 }
