@@ -14,6 +14,7 @@ import { create_runner } from '../src/service/worker';
 import { JobQueue } from '../src/service/queue';
 import { config } from '../src/service/config';
 import type { Post } from '../src/types';
+import type { Progress } from '../src/shared/progress';
 
 const fixtures = JSON.parse(await readFile('tests/regression/api-responses.json', 'utf8')) as {
     path: string; parameters: Record<string, string>; response: Record<string, unknown>;
@@ -56,6 +57,56 @@ test('recorded API responses: cursor pages, nested pages, complete content and s
     }
     assert.equal(Object.keys(actual.image_map || {}).length, 24);
     assert.equal(result.warnings.length, 0);
+});
+
+test('collection progress counts completed pages and all nested replies across floors', async () => {
+    const updates: Progress[] = [];
+    const { request, calls } = replay();
+    await collect_api(baseline.id, request, async value => { updates.push(value); }, signal);
+    assert.equal(calls.length, 5, 'Progress does not add content requests');
+    assert.deepEqual(updates[0].collection, { pages: { current: 0, complete: false } });
+    assert.deepEqual(updates[1].collection?.pages, { current: 1, total: 2, complete: false });
+    const start21 = updates.find(p => p.stage === '采集第 21 楼的楼中楼' && p.current === 0);
+    assert.deepEqual(start21?.collection, { pages: { current: 2, total: 2, complete: true }, replies: { current: 7, total: 36, complete: false } });
+    const page21 = updates.find(p => p.stage === '采集第 21 楼的楼中楼' && p.current === 10);
+    assert.equal(page21?.collection?.replies?.current, 17);
+    const start26 = updates.find(p => p.stage === '采集第 26 楼的楼中楼' && p.current === 0);
+    assert.deepEqual(start26?.collection?.replies, { current: 30, total: 36, complete: false });
+    assert.deepEqual(updates.at(-1)?.collection?.replies, { current: 36, total: 36, complete: true });
+});
+
+test('reply progress adjusts estimates for live additions and deletions without counting overlaps twice', async () => {
+    for (const scenario of ['added', 'deleted', 'overlap', 'none']) {
+        const records = structuredClone(fixtures);
+        const last = records[3].response.data as Record<string, unknown>;
+        const replies = last.post_list as Record<string, unknown>[];
+        if (scenario === 'added') { replies.push({ ...replies[0], id: 999999999999 }); }
+        if (scenario === 'deleted') { last.post_list = []; }
+        if (scenario === 'overlap') {
+            const first = (records[2].response.data as Record<string, unknown>).post_list as Record<string, unknown>[];
+            replies.unshift(first[first.length - 1]);
+        }
+        if (scenario === 'none') {
+            for (const record of records.slice(0, 2)) {
+                for (const post of [record.response.first_floor, ...(record.response.post_list as unknown[])]) {
+                    if (!post) { continue; }
+                    Object.assign(post, { sub_post_number: 0, sub_post_list: undefined });
+                }
+            }
+        }
+        const updates: Progress[] = [];
+        const result = await collect_api(baseline.id, replay(records).request, async value => { updates.push(value); }, signal);
+        const total = result.floors.flatMap(f => f.sub_comment_list || []).length;
+        assert.deepEqual(updates.at(-1)?.collection?.replies, { current: total, total, complete: true });
+        let previous = 0;
+        for (const update of updates) {
+            const count = update.collection?.replies;
+            if (!count) { continue; }
+            assert(count.current >= previous);
+            assert(count.total !== undefined && count.current <= count.total);
+            previous = count.current;
+        }
+    }
 });
 
 test('space rule is narrow, auditable and reversible with strict mode', () => {

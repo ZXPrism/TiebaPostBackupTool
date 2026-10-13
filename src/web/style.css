@@ -34,5 +34,8 @@ summary { cursor: pointer; margin: 15px 0; }
 .actions button.secondary { background: #edf2eb; color: #245a46; }
 .empty { text-align: center; padding: 36px; color: #87938c; border: 1px dashed #ccd6ca; border-radius: 12px; line-height: 1.8; }
 progress { width: 100%; height: 6px; accent-color: #326950; }
+.collection-progress { margin-top: 14px; }
+.progress-caption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; line-height: 1.7; }
+.progress-caption span:last-child { color: #74817a; font-variant-numeric: tabular-nums; }
 footer { font-size: 12px; margin-top: 36px; }
 @media (max-width: 550px) { main { margin-top: 36px; } .panel, .job { padding: 20px; } .input-row { flex-direction: column; } .job-heading { align-items: flex-start; } }

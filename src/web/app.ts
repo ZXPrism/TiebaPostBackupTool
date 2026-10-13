@@ -1,4 +1,5 @@
 import type { Job } from '../service/model';
+import type { ProgressCount } from '../shared/progress';
 
 function element<T extends HTMLElement>(id: string): T {
     const value = document.getElementById(id);
@@ -65,13 +66,34 @@ function render(jobs: Job[]): void {
         const heading = node('div', '', 'job-heading');
         heading.append(node('h3', `帖子 ${job.post_id}`), node('span', labels[job.status], `badge ${job.status}`));
         card.append(heading, node('p', new Date(job.created_at).toLocaleString('zh-CN'), 'meta'));
-        const { stage, current, total } = job.progress;
+        const { stage, current, total, collection } = job.progress;
         card.append(node('p', stage + (total ? ` · ${current || 0} / ${total}` : '')));
         if (job.status === 'running') {
-            const progress = node('progress');
-            progress.setAttribute('aria-label', stage);
-            if (total) { progress.max = total; progress.value = current || 0; }
-            card.append(progress);
+            if (collection) {
+                const add_progress = (label: string, unit: string, count?: ProgressCount) => {
+                    const group = node('div', '', 'collection-progress');
+                    const caption = node('div', '', 'progress-caption');
+                    const detail = !count ? '等待楼层采集完成' : count.total === undefined ? '正在获取总页数'
+                        : `${count.current} / ${count.complete ? '' : '约 '}${count.total} ${unit}${count.complete ? ' · 已完成' : ''}`;
+                    caption.append(node('span', label), node('span', detail));
+                    const bar = node('progress');
+                    bar.setAttribute('aria-label', label);
+                    if (!count) { bar.max = 1; bar.value = 0; }
+                    else if (count.total !== undefined) {
+                        bar.max = Math.max(count.total, 1);
+                        bar.value = count.complete ? bar.max : count.current;
+                    }
+                    group.append(caption, bar);
+                    card.append(group);
+                };
+                add_progress('楼层分页', '页', collection.pages);
+                add_progress('全帖楼中楼', '条', collection.replies);
+            } else {
+                const progress = node('progress');
+                progress.setAttribute('aria-label', stage);
+                if (total) { progress.max = total; progress.value = current || 0; }
+                card.append(progress);
+            }
         }
         if (job.floor_count !== undefined) { card.append(node('p', `${job.floor_count} 个楼层 · ${job.image_count} 张图片`, 'meta')); }
         if (job.error) { card.append(node('p', job.error, 'error')); }

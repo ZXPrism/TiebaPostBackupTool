@@ -1,10 +1,7 @@
-export type JobStatus = 'queued' | 'running' | 'complete' | 'partial' | 'failed';
+import type { Progress } from '../shared/progress';
+export type { Progress } from '../shared/progress';
 
-export interface Progress {
-    stage: string;
-    current?: number;
-    total?: number;
-}
+export type JobStatus = 'queued' | 'running' | 'complete' | 'partial' | 'failed';
 
 export interface Job {
     id: string;

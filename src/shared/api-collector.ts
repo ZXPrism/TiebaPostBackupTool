@@ -1,4 +1,5 @@
 import type { Comment, Floor, Post } from '../types';
+import type { CollectionProgress, Progress } from './progress';
 
 export type ApiPath = '/c/f/pb/page_pc' | '/c/f/pb/nestedFloor';
 export type ApiRequest = (path: ApiPath, parameters: Record<string, string>) => Promise<unknown>;
@@ -94,7 +95,7 @@ function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: bool
 /** Transport-independent collector; no page navigation and no implicit retry/fallback. */
 export async function collect_api(
     post_id: number, request: ApiRequest,
-    progress: (value: { stage: string; current?: number; total?: number }) => Promise<void>,
+    progress: (value: Progress) => Promise<void>,
     signal: AbortSignal, max_pages = 200,
 ): Promise<Collection> {
     const users = new Map<number, RecordValue>();
@@ -102,12 +103,18 @@ export async function collect_api(
     const seen = new Set<number>();
     const warnings: string[] = [];
     let metadata: Collection['metadata'] | undefined;
-    let page_total: number | undefined;
     let last_pid: number | undefined;
     let finished = false;
+    const collection: CollectionProgress = { pages: { current: 0, complete: false } };
+    const report = (value: Omit<Progress, 'collection'>) => progress({
+        ...value, collection: {
+            pages: { ...collection.pages },
+            ...(collection.replies ? { replies: { ...collection.replies } } : {}),
+        },
+    });
     for (let number = 1; number <= max_pages; number++) {
         signal.throwIfAborted();
-        await progress({ stage: '采集帖子', current: number, total: page_total });
+        if (number === 1) { await report({ stage: '采集帖子', current: 0 }); }
         const result = object(await request('/c/f/pb/page_pc', {
             kz: String(post_id), ...(last_pid ? { last_pid: String(last_pid) } : { pn: '1' }),
             lz: '0', r: '0', mark_type: '0', back: '0', fr: '', session_request_times: '1',
@@ -124,7 +131,6 @@ export async function collect_api(
         }
         const total = integer(page.total_page, 'page.total_page', 1);
         if (total > max_pages) { throw new Error(`接口页数 ${total} 超过 ${max_pages} 页限制`); }
-        page_total = total;
         integer(thread.valid_post_num, 'thread.valid_post_num', 1);
         const reply_count = integer(thread.reply_num, 'thread.reply_num');
         if (!metadata) {
@@ -155,18 +161,26 @@ export async function collect_api(
             seen.add(id);
             raw_floors.push(post);
         }
-        if (!flag(page.has_more, 'page.has_more')) { finished = true; break; }
+        finished = !flag(page.has_more, 'page.has_more');
+        collection.pages = { current: number, total: finished ? number : Math.max(total, number + 1), complete: finished };
+        await report({ stage: '采集帖子', current: number, total: collection.pages.total });
+        if (finished) { break; }
         if (!posts.length) { throw new Error('接口声明还有下一页，但当前楼层列表为空'); }
         if (raw_floors.length === previous_count) { throw new Error('接口楼层分页游标未前进'); }
         last_pid = integer(posts[posts.length - 1].id, 'last_pid', 1);
     }
     if (!finished || !metadata) { throw new Error(`接口分页未结束，已达到 ${max_pages} 页限制`); }
+    let remaining_replies = raw_floors.reduce((sum, raw) => sum + integer(raw.sub_post_number, `第 ${raw.floor} 楼 sub_post_number`), 0);
+    let completed_replies = 0;
+    collection.replies = { current: 0, total: remaining_replies, complete: false };
+    await report({ stage: '采集楼中楼' });
     const floors: Floor[] = [];
     for (const raw of raw_floors) {
         const index = integer(raw.floor, 'floor', 1);
         try {
             signal.throwIfAborted();
             const count = integer(raw.sub_post_number, 'sub_post_number');
+            remaining_replies -= count;
             let replies = raw.sub_post_list
                 ? array(object(raw.sub_post_list, 'sub_post_list').sub_post_list, 'sub_post_list.sub_post_list').map(value => object(value, 'sub_post')) : [];
             if (replies.length < count) {
@@ -176,7 +190,9 @@ export async function collect_api(
                 let done = false;
                 for (let number = 1; number <= max_pages; number++) {
                     signal.throwIfAborted();
-                    await progress({ stage: `采集第 ${index} 楼的楼中楼`, current: replies.length, total: count });
+                    collection.replies = { current: completed_replies + replies.length,
+                        total: completed_replies + remaining_replies + Math.max(count, replies.length + 1), complete: false };
+                    await report({ stage: `采集第 ${index} 楼的楼中楼`, current: replies.length, total: Math.max(count, replies.length + 1) });
                     const result = object(await request('/c/f/pb/nestedFloor', { thread_id: String(post_id), post_id: String(raw.id), offset: String(offset) }), 'nestedFloor');
                     const page = object(result.page, 'nestedFloor.page');
                     const batch = array(result.post_list, 'nestedFloor.post_list').map(value => object(value, 'sub_post'));
@@ -187,7 +203,11 @@ export async function collect_api(
                         batch_ids.add(id);
                         if (!reply_ids.has(id)) { reply_ids.add(id); replies.push(reply); }
                     }
-                    if (!flag(page.has_more, 'nestedFloor.page.has_more')) { done = true; break; }
+                    done = !flag(page.has_more, 'nestedFloor.page.has_more');
+                    collection.replies = { current: completed_replies + replies.length,
+                        total: completed_replies + remaining_replies + (done ? replies.length : Math.max(count, replies.length + 1)), complete: false };
+                    await report({ stage: `采集第 ${index} 楼的楼中楼`, current: replies.length, total: done ? replies.length : Math.max(count, replies.length + 1) });
+                    if (done) { break; }
                     const next = integer(page.offset, 'nestedFloor.page.offset', 1);
                     if (!batch.length || next <= offset) { throw new Error('楼中楼分页游标未前进'); }
                     offset = next;
@@ -196,10 +216,13 @@ export async function collect_api(
             }
             if (new Set(replies.map(reply => integer(reply.id, 'sub_post.id', 1))).size !== replies.length) { throw new Error('楼中楼存在重复回复 ID'); }
             floors.push({ index, comment: comment(raw, users, false), ...(replies.length ? { sub_comment_list: replies.map(reply => comment(reply, users, true)) } : {}) });
+            completed_replies += replies.length;
         } catch (error) {
             if (signal.aborted) { signal.throwIfAborted(); }
             throw new Error(`第 ${index} 楼: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
         }
     }
+    collection.replies = { current: completed_replies, total: completed_replies, complete: true };
+    await report({ stage: '内容采集完成' });
     return { metadata, floors, warnings };
 }

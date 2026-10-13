@@ -232,7 +232,12 @@ test('API result renders all floors and nested replies in the shared offline vie
 
 test('HTTP API and frontend submit, poll, download without an access token', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tieba-http-'));
-    const queue = new JobQueue(root, async (_job, directory) => {
+    let finish_collection = () => {};
+    const collecting = new Promise<void>(resolve => { finish_collection = resolve; });
+    const queue = new JobQueue(root, async (_job, directory, progress) => {
+        await progress({ stage: '采集第 117 楼的楼中楼', current: 0, total: 5,
+            collection: { pages: { current: 381, total: 381, complete: true }, replies: { current: 410, total: 20000, complete: false } } });
+        await collecting;
         await writeFile(join(directory, 'post.json'), '{"ok":true}');
         await writeFile(join(directory, 'backup.tar'), 'archive');
         return { filename: '测试.tar', floor_count: 28, image_count: 24, warnings: ['模拟图片失败'] };
@@ -252,6 +257,20 @@ test('HTTP API and frontend submit, poll, download without an access token', asy
         await page.goto(origin);
         await page.locator('#post-url').fill(base);
         await page.locator('#submit').click();
+        await page.getByRole('progressbar', { name: '全帖楼中楼' }).waitFor();
+        assert.equal(await page.getByRole('progressbar').count(), 2);
+        assert.equal(await page.getByRole('progressbar', { name: '楼层分页' }).getAttribute('value'), '381');
+        const replies = page.getByRole('progressbar', { name: '全帖楼中楼' });
+        assert.equal(await replies.getAttribute('value'), '410');
+        assert.equal(await replies.getAttribute('max'), '20000');
+        assert.match(await page.locator('.job').innerText(), /410 \/ 约 20000 条/);
+        const saved = JSON.parse(await readFile(join(root, queue.list()[0].id, 'job.json'), 'utf8'));
+        assert.equal(saved.progress.collection.replies.current, 410);
+        await page.setViewportSize({ width: 390, height: 844 });
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+        await page.screenshot({ path: join(root, 'collection-progress.png'), fullPage: true });
+        console.log(`Progress screenshot: ${join(root, 'collection-progress.png')}`);
+        finish_collection();
         await page.locator('.badge.partial').waitFor();
         const downloading = page.waitForEvent('download');
         await page.getByRole('button', { name: '下载 JSON' }).click();
@@ -266,6 +285,7 @@ test('HTTP API and frontend submit, poll, download without an access token', asy
         assert.equal(await response.text(), 'archive');
         assert(response.headers.get('content-disposition')?.includes("filename*=UTF-8''"));
     } finally {
+        finish_collection();
         await page.close();
         await queue.close();
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
