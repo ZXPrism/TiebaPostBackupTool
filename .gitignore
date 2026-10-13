@@ -13,6 +13,7 @@ node_modules
 /test/*
 !/test/post.json
 !/test/api-responses.json
+!/test/api-unnumbered-emoticon.json
 
 .data/
 .env

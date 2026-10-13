@@ -76,6 +76,31 @@ test('space rule is narrow, auditable and reversible with strict mode', () => {
     assert(regression_report(baseline, actual).differences.length > 1);
 });
 
+test('recorded unnumbered emoticon survives floor/reply collection and offline image mapping', async () => {
+    // Content item from thread 11052619456, floor 85, nested offset 10.
+    const { content } = JSON.parse(await readFile('test/api-unnumbered-emoticon.json', 'utf8'));
+    const url = 'https://tb3.bdstatic.com/emoji/image_emoticon@2x.png';
+    const html = `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${url}">`;
+    assert.equal(render_api_content(content), html);
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = content;
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const reply = result.floors.find(f => f.index === 21)?.sub_comment_list?.[0];
+    assert(reply);
+    assert.equal(result.floors[0].comment.content, html);
+    assert.equal(reply.content, html);
+    const post = finalize_post(result.metadata, result.floors);
+    const filename = post.image_map?.[url];
+    assert.equal(filename, 'image_1.png');
+    assert.equal(post.floor_list[0].comment.content, html.replace(url, `./images/${filename}`));
+    assert.equal(reply.content, post.floor_list[0].comment.content);
+    for (const name of ['image_emoticon.png', 'image_emoticon/../x', 'image_emoticon" onerror="x']) {
+        assert.throws(() => render_api_content([{ type: 2, text: name }]), /尚未支持/);
+    }
+});
+
 test('API accepts changing page and reply totals while keeping the initial thread metadata', async () => {
     for (const delta of [-1, 1]) {
         for (const field of ['total_page', 'valid_post_num', 'reply_num']) {

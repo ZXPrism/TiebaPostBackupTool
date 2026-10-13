@@ -51,8 +51,11 @@ export function render_api_content(value: unknown): string {
             case 1: return `<a href="${link(item.link, 'content.link')}" target="_blank">${escape(text(item.text, 'content.text'))}</a>`;
             case 2: {
                 const name = text(item.text, 'content.text');
-                if (!/^image_emoticon\d+$/.test(name)) { throw new Error(`尚未支持的接口表情: ${name}`); }
-                return `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="https://gsp0.baidu.com/5aAHeD3nKhI2p27j8IqW0jdnxx1xbK/tb/editor/images/client/${name}.png">`;
+                if (!/^image_emoticon\d*$/.test(name)) { throw new Error(`尚未支持的接口表情: ${name}`); }
+                // The unnumbered 呵呵 emoticon has no PNG at the legacy client path.
+                const url = name === 'image_emoticon' ? 'https://tb3.bdstatic.com/emoji/image_emoticon@2x.png'
+                    : `https://gsp0.baidu.com/5aAHeD3nKhI2p27j8IqW0jdnxx1xbK/tb/editor/images/client/${name}.png`;
+                return `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${url}">`;
             }
             case 3: {
                 const dimensions = text(item.bsize, 'content.bsize').match(/^(\d+),(\d+)$/);
