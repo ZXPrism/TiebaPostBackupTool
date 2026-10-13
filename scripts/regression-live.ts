@@ -24,8 +24,8 @@ const job: Job = {
     created_at: now, updated_at: now, progress: { stage: '开始回归' }, warnings: [],
 };
 const controller = new AbortController();
-const timer = setTimeout(() => controller.abort(), config.job_timeout_ms);
-const interrupt = () => controller.abort();
+const timer = setTimeout(() => controller.abort(new Error(`回归运行超过 ${config.job_timeout_ms / 60000} 分钟，已中止`)), config.job_timeout_ms);
+const interrupt = () => controller.abort(new Error('回归收到终端中断信号，已中止'));
 process.once('SIGINT', interrupt);
 process.once('SIGTERM', interrupt);
 try {

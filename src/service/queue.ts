@@ -94,7 +94,7 @@ export class JobQueue {
             await this.save(job);
             const controller = new AbortController();
             this.current = controller;
-            const timer = setTimeout(() => controller.abort(), config.job_timeout_ms);
+            const timer = setTimeout(() => controller.abort(new Error(`任务运行超过 ${config.job_timeout_ms / 60000} 分钟，已中止`)), config.job_timeout_ms);
             try {
                 const result = await this.runner(job, this.directory(job.id), async (progress: Progress) => {
                     job.progress = progress;
@@ -120,7 +120,7 @@ export class JobQueue {
 
     async close(): Promise<void> {
         this.stopped = true;
-        this.current?.abort();
+        this.current?.abort(new Error('服务正在停止，任务已中止'));
         await this.task;
         await this.writes;
     }

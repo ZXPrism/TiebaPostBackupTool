@@ -4,6 +4,7 @@ import { readFile, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { collect_api, render_api_content, type ApiRequest } from '../src/shared/api-collector';
 import { finalize_post } from '../src/shared/post';
 import { normalize_content_spaces, regression_report } from '../src/shared/regression';
@@ -11,6 +12,7 @@ import { create_api_request, RequestPacer, sign_form } from '../src/service/api'
 import type { APIRequestContext, APIResponse, BrowserContext } from 'playwright';
 import { create_runner } from '../src/service/worker';
 import { JobQueue } from '../src/service/queue';
+import { config } from '../src/service/config';
 import type { Post } from '../src/types';
 
 const fixtures = JSON.parse(await readFile('test/api-responses.json', 'utf8')) as {
@@ -114,13 +116,16 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
             return { status: () => 200, text: async () => JSON.stringify(record.response), dispose: async () => undefined };
         } },
     } as unknown as BrowserContext;
-    let image_count = 0;
+    let image_count = 0, active_images = 0, peak_images = 0;
     const download = async (_context: BrowserContext, _url: string, _post: string, before?: () => Promise<void>) => {
         await before?.();
         image_count++;
+        peak_images = Math.max(peak_images, ++active_images);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        active_images--;
         return new Blob(['synthetic-image'], { type: 'image/png' });
     };
-    const queue = new JobQueue(root, create_runner(async () => context, download, 'api', new RequestPacer(0)));
+    const queue = new JobQueue(root, create_runner(async () => context, download, 'api', new RequestPacer(0), new RequestPacer(1)));
     await queue.initialize();
     try {
         const job = await queue.submit(String(baseline.id));
@@ -131,6 +136,7 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
         assert.equal(job.status, 'complete', job.error || 'Job did not complete');
         assert.equal(job.floor_count, 28);
         assert.equal(image_count, 24);
+        assert(peak_images > 1 && peak_images <= 5, `Image concurrency: ${peak_images}`);
         assert.equal(calls.length, 5);
         assert.equal(closed, 1);
         const post = JSON.parse(await readFile(join(root, job.id, 'post.json'), 'utf8')) as Post;
@@ -152,7 +158,7 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
     let attempts = 0;
     const runner = create_runner(async () => context, async (_context, _url, _post, before) => {
         await before?.(); attempts++; throw new Error('HTTP 429');
-    }, 'api', new RequestPacer(0));
+    }, 'api', new RequestPacer(0), new RequestPacer(5));
     await assert.rejects(runner(queue.list()[0], root, progress, signal), /HTTP 429/);
     assert.equal(attempts, 1, 'Stop further image requests after the first failure');
 });
@@ -191,12 +197,18 @@ test('API request signing, response validation, and no retries', async () => {
 test('pacer serializes concurrent callers, spaces requests across jobs and aborts waiting requests', async () => {
     let now = 0, active = 0, peak = 0;
     const starts: number[] = [];
-    const pacer = new RequestPacer(30000, () => now, async ms => { now += ms; });
-    const operation = async () => { starts.push(now); peak = Math.max(peak, ++active); await Promise.resolve(); now += 1000; active--; };
+    const pacer = new RequestPacer(1000, () => now, async ms => { now += ms; });
+    const operation = async () => { starts.push(now); peak = Math.max(peak, ++active); await Promise.resolve(); now += 100; active--; };
     await Promise.all([pacer.run(operation, signal), pacer.run(operation, signal), pacer.run(operation, signal)]);
     await pacer.run(operation, signal);
-    assert.deepEqual(starts, [0, 30000, 60000, 90000]);
+    assert.deepEqual(starts, [0, 1000, 2000, 3000]);
     assert.equal(peak, 1);
+    const image_pacer = new RequestPacer(200, () => now, async ms => { now += ms; });
+    const image_starts: number[] = [];
+    for (let i = 0; i < 5; i++) { await image_pacer.run(async () => { image_starts.push(now); }, signal); }
+    assert.deepEqual(image_starts, [3100, 3300, 3500, 3700, 3900]);
+    await pacer.run(operation, signal);
+    assert.equal(starts.at(-1), 4000, 'Image starts do not change the content pacer clock');
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(pacer.run(operation, controller.signal), /abort/i);
@@ -206,4 +218,69 @@ test('pacer serializes concurrent callers, spaces requests across jobs and abort
     const request = waiting.run(async () => assert.fail('Should not issue a request'), cancel.signal);
     setTimeout(() => cancel.abort(), 10);
     await assert.rejects(request, /abort/i);
+});
+
+test('large synthetic thread covers 380 API pages and 20,000 nested replies without network access', async () => {
+    // Hypothetical 190 legacy pages x 30 floors; this is not a measurement of the live target.
+    const total_floors = 5700, total_replies = 20000, page_size = 15;
+    const user = { id: 1, name: 'author', name_show: 'author', portrait: 'fixture' };
+    const floor = (index: number) => ({
+        id: 100000 + index, floor: index, author_id: 1, time: 1700000000,
+        content: [{ type: 0, text: `floor ${index}` }], sub_post_number: index === 1 ? total_replies : 0,
+    });
+    let calls = 0, now = 0;
+    const pacer = new RequestPacer(1000, () => now, async ms => { now += ms; });
+    const request: ApiRequest = (path, parameters) => pacer.run(async () => {
+        calls++;
+        if (path === '/c/f/pb/page_pc') {
+            const start = parameters.last_pid ? Number(parameters.last_pid) - 100000 + 1 : 1;
+            const end = Math.min(start + page_size - 1, total_floors);
+            const posts = Array.from({ length: end - start + 1 }, (_, i) => floor(start + i));
+            return {
+                thread: { id: 123, title: 'large fixture', reply_num: total_floors - 1 + total_replies, valid_post_num: total_floors, is_partial_visible: 0 },
+                forum: { name: 'fixture' }, has_fold_comment: 0, user_list: [user],
+                page: { total_page: Math.ceil(total_floors / page_size), has_more: end < total_floors ? 1 : 0 },
+                ...(start === 1 ? { first_floor: posts.shift() } : {}), post_list: posts,
+            };
+        }
+        const offset = Number(parameters.offset);
+        return {
+            page: { offset: offset + 10, has_more: offset + 10 < total_replies ? 1 : 0 },
+            post_list: Array.from({ length: Math.min(10, total_replies - offset) }, (_, i) => ({
+                id: 1000000 + offset + i, author_id: 1, author: user, time: 1700000000 + offset + i,
+                content: [{ type: 0, text: `reply ${offset + i + 1}` }],
+            })),
+        };
+    }, signal);
+    const result = await collect_api(123, request, progress, signal, config.max_api_pages);
+    assert.equal(result.floors.length, total_floors);
+    assert.equal(result.floors[0].sub_comment_list?.length, total_replies);
+    assert.equal(result.floors[0].sub_comment_list?.at(-1)?.content, 'reply 20000');
+    assert.equal(result.floors.at(-1)?.index, total_floors);
+    assert.equal(calls, 2380);
+    assert.equal(now, 2379000, '39m39s of simulated request spacing; excludes real latency, images and packaging');
+});
+
+test('API startup configuration uses an hour budget and validates rate overrides', () => {
+    const run = (overrides: Record<string, string>) => spawnSync(process.execPath, [
+        '--import', 'tsx', '--input-type=module', '-e',
+        "import { config } from './src/service/config.ts'; console.log(JSON.stringify(config));",
+    ], { encoding: 'utf8', env: { ...process.env, TIEBA_BACKEND: 'api', TIEBA_API_INTERVAL_MS: '1000', TIEBA_IMAGE_INTERVAL_MS: '200', ...overrides } });
+    const api = run({});
+    assert.ifError(api.error);
+    assert.equal(api.status, 0, api.stderr);
+    const selected = JSON.parse(api.stdout);
+    assert.equal(selected.job_timeout_ms, 3600000);
+    assert.equal(selected.api_request_interval_ms, 1000);
+    assert.equal(selected.image_request_interval_ms, 200);
+    assert.equal(selected.max_api_pages, 2000);
+    const browser = run({ TIEBA_BACKEND: 'browser' });
+    assert.equal(JSON.parse(browser.stdout).job_timeout_ms, 1800000);
+    const custom = run({ TIEBA_API_INTERVAL_MS: '1500', TIEBA_IMAGE_INTERVAL_MS: '300' });
+    assert.equal(JSON.parse(custom.stdout).api_request_interval_ms, 1500);
+    for (const value of ['0', '-1', '1.5', 'NaN', '']) {
+        const invalid = run({ TIEBA_API_INTERVAL_MS: value });
+        assert.notEqual(invalid.status, 0);
+        assert.match(invalid.stderr, /TIEBA_API_INTERVAL_MS 必须为正整数/);
+    }
 });

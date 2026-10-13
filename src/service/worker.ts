@@ -56,9 +56,8 @@ export function create_runner(
     download: typeof fetch_image = fetch_image,
     backend: Backend = config.backend,
     pacer = new RequestPacer(config.api_request_interval_ms),
+    image_pacer = new RequestPacer(config.image_request_interval_ms),
 ): Runner {
-    // Serial queue below also covers image redirects; API jobs stop after the first failed image.
-    let image_tail = Promise.resolve();
     return async (job, directory, progress, signal) => {
         signal.throwIfAborted();
         const context = await launch();
@@ -77,7 +76,7 @@ export function create_runner(
             let total_pages = 1;
             if (backend === 'api') {
                 const collection = await collect_api(job.post_id,
-                    create_api_request(context.request, job.url, pacer, signal), progress, signal, config.max_pages);
+                    create_api_request(context.request, job.url, pacer, signal), progress, signal, config.max_api_pages);
                 ({ floors, warnings, metadata } = collection);
                 total_pages = metadata.page_cnt;
             } else {
@@ -121,20 +120,18 @@ export function create_runner(
             }
             if (!metadata) { throw new Error('没有采集结果'); }
             let image_error: unknown;
-            const images = new ImageHandler(url => {
+            const images = new ImageHandler(async url => {
                 signal.throwIfAborted();
                 if (backend !== 'api') { return download(context, url, job.url); }
-                const result = image_tail.then(async () => {
-                    if (image_error) { throw image_error; }
-                    try {
-                        return await download(context, url, job.url, () => pacer.run(async () => undefined, signal));
-                    } catch (error) {
-                        image_error = new Error(`图片 ${url}: ${error instanceof Error ? error.message : String(error)}`);
-                        throw image_error;
-                    }
-                });
-                image_tail = result.then(() => undefined, () => undefined);
-                return result;
+                try {
+                    // ImageHandler caps in-flight downloads at five. Gate every start, including redirects.
+                    return await download(context, url, job.url, () => image_pacer.run(async () => {
+                        if (image_error) { throw image_error; }
+                    }, signal));
+                } catch (error) {
+                    image_error ??= new Error(`图片 ${url}: ${error instanceof Error ? error.message : String(error)}`);
+                    throw image_error;
+                }
             });
             const post = finalize_post({ ...metadata, page_cnt: total_pages }, floors, images);
             await mkdir(directory, { recursive: true });
@@ -172,7 +169,7 @@ export function create_runner(
             if (page && !page.isClosed()) {
                 await page.screenshot({ path: join(directory, 'failure.png'), timeout: 5000 }).catch(() => undefined);
             }
-            if (signal.aborted) { throw new Error('任务已中止或超过最长运行时间', { cause: error }); }
+            if (signal.aborted) { signal.throwIfAborted(); }
             throw error;
         } finally {
             signal.removeEventListener('abort', abort);

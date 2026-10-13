@@ -3,13 +3,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { APIRequestContext } from 'playwright';
 import type { ApiRequest } from '../shared/api-collector';
 
-/** One queue shared across API jobs, including image requests. No retries. */
+/** A serial queue with a minimum start interval. Content and image starts use separate instances. */
 export class RequestPacer {
     private tail: Promise<unknown> = Promise.resolve();
     private last_start = -Infinity;
 
     constructor(
-        private readonly interval_ms = 30000,
+        private readonly interval_ms: number,
         private readonly now: () => number = Date.now,
         private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void> = async (ms, signal) => { await delay(ms, undefined, { signal }); },
     ) {}

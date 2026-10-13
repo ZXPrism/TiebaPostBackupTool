@@ -35,7 +35,10 @@ try {
     const port = address && typeof address !== 'string' ? address.port : config.port;
     const host = config.host.includes(':') ? `[${config.host}]` : config.host;
     console.log(`贴吧备份服务: http://${host}:${port}（采集后端 ${config.backend}，Chromium headless，单任务执行）`);
-    if (config.backend === 'api') { console.log(`接口及图片请求间隔至少 ${config.api_request_interval_ms / 1000} 秒，不自动重试`); }
+    if (config.backend === 'api') {
+        console.log(`内容接口串行，间隔至少 ${config.api_request_interval_ms} ms；图片最多 5 并发，启动间隔至少 ${config.image_request_interval_ms} ms；不自动重试`);
+        console.log(`接口任务上限 ${config.job_timeout_ms / 60000} 分钟，楼层及每层楼中楼分别最多 ${config.max_api_pages} 个接口分页`);
+    }
 } catch (error) {
     await close();
     throw error;
