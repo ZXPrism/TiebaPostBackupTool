@@ -230,6 +230,24 @@ test('API result renders all floors and nested replies in the shared offline vie
     } finally { await page.close(); }
 });
 
+test('offline viewer renders a large archive without reparsing previously rendered floors', async () => {
+    const post = JSON.parse(await readFile('tests/regression/post.json', 'utf8')) as Post;
+    const comment = { author: '测试作者', date: '2026-10-14 00:00', content: '楼中楼内容' };
+    post.floor_list = Array.from({ length: 6000 }, (_, i) => ({
+        index: i + 1,
+        comment: { ...comment, content: `第 ${i + 1} 楼的正文` },
+        sub_comment_list: Array.from({ length: 3 }, () => ({ ...comment })),
+    }));
+    const page = await browser.newPage();
+    try {
+        await page.route('**/*', route => route.abort());
+        await page.setContent(new ImageHandler().create_viewer_html(post), { timeout: 20000 });
+        assert.equal(await page.locator('.floor').count(), 6000);
+        assert.equal(await page.locator('.sub-comment').count(), 18000);
+        assert.equal(await page.locator('.floor > .content').last().textContent(), '第 6000 楼的正文');
+    } finally { await page.close(); }
+});
+
 test('HTTP API and frontend submit, poll, download without an access token', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tieba-http-'));
     let finish_collection = () => {};

@@ -488,7 +488,7 @@ export class ImageHandler {
         } else {
             post.floor_list.forEach((floor, index) => {
                 try {
-                    contentDiv.innerHTML += renderFloor(floor);
+                    contentDiv.insertAdjacentHTML('beforeend', renderFloor(floor));
                 } catch (e) {
                 }
             });
