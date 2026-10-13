@@ -152,6 +152,49 @@ test('recorded unnumbered emoticon survives floor/reply collection and offline i
     }
 });
 
+test('recorded Shoubai emoticon is preserved as an offline WebP image', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-shoubai-emoticon.json', 'utf8'));
+    const url = 'https://tb3.bdstatic.com/shoubai_emoji/shoubai_emoji_face_04.webp';
+    const html = `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${url}">`;
+    assert.equal(render_api_content(content), html);
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = content;
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    assert.equal(post.image_map?.[url], 'image_1.webp');
+    assert.equal(post.floor_list[0].comment.content, html.replace(url, './images/image_1.webp'));
+    assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, post.floor_list[0].comment.content);
+});
+
+test('Shoubai family uses official number formatting, supported ranges and exclusions', () => {
+    for (const [name, filename] of [['4', '04'], ['04', '04'], ['1', '01'], ['229', '229'], ['367', '367'], ['370', '370']]) {
+        const html = render_api_content([{ type: 2, text: `shoubai_emoji_face_${name}` }]);
+        assert(html.includes(`/shoubai_emoji_face_${filename}.webp"`));
+    }
+    for (const name of ['0', '107', '109', '204', '230', '366', '371', 'NaN', '../04', '04" onerror="x']) {
+        assert.throws(() => render_api_content([{ type: 2, text: `shoubai_emoji_face_${name}` }]), /尚未支持/);
+    }
+});
+
+test('unsupported content stops collection on the response containing it, before further requests', async () => {
+    for (const location of ['floor', 'embedded', 'nested']) {
+        const records = structuredClone(fixtures);
+        const content = [{ type: 2, text: 'unknown_smiley' }];
+        const first = records[0].response.first_floor as Record<string, unknown>;
+        if (location === 'floor') { first.content = content; }
+        if (location === 'embedded') { first.sub_post_list = { sub_post_list: [{ content }] }; }
+        if (location === 'nested') {
+            const data = records[2].response.data as Record<string, unknown>;
+            (data.post_list as Record<string, unknown>[])[0].content = content;
+        }
+        const { request, calls } = replay(records);
+        await assert.rejects(collect_api(baseline.id, request, progress, signal), location === 'nested' ? /第 21 楼.*unknown_smiley/ : /第 1 楼.*unknown_smiley/);
+        assert.equal(calls.length, location === 'nested' ? 3 : 1);
+    }
+});
+
 test('recorded search keywords retain only text and order in floors and nested replies', async () => {
     const { content } = JSON.parse(await readFile('tests/regression/api-search-link.json', 'utf8'));
     const html = '网球风云吧好像除了网球都聊';

@@ -41,6 +41,22 @@ function link(value: unknown, field: string): string {
     return escape(url.href);
 }
 
+function emoticon_url(name: string): string {
+    if (name === 'image_emoticon') { return 'https://tb3.bdstatic.com/emoji/image_emoticon@2x.png'; }
+    if (/^image_emoticon\d+$/.test(name)) {
+        return `https://gsp0.baidu.com/5aAHeD3nKhI2p27j8IqW0jdnxx1xbK/tb/editor/images/client/${name}.png`;
+    }
+    const shoubai = name.match(/^shoubai_emoji_face_(\d+)$/);
+    if (shoubai) {
+        const id = Number(shoubai[1]);
+        // Match Tieba's getShoubaiEmojiSrc range and excluded IDs.
+        if ((id > 0 && id <= 229 && ![107, 109, 204].includes(id)) || [367, 368, 369, 370].includes(id)) {
+            return `https://tb3.bdstatic.com/shoubai_emoji/shoubai_emoji_face_${String(id).padStart(2, '0')}.webp`;
+        }
+    }
+    throw new Error(`尚未支持的接口表情: ${name}`);
+}
+
 /** Render supported structured content. Unknown types fail rather than disappearing from a backup. */
 export function render_api_content(value: unknown): string {
     return array(value, 'content').map((value, index) => {
@@ -54,10 +70,7 @@ export function render_api_content(value: unknown): string {
             case 1: return `<a href="${link(item.link, 'content.link')}" target="_blank">${escape(text(item.text, 'content.text'))}</a>`;
             case 2: {
                 const name = text(item.text, 'content.text');
-                if (!/^image_emoticon\d*$/.test(name)) { throw new Error(`尚未支持的接口表情: ${name}`); }
-                // The unnumbered 呵呵 emoticon has no PNG at the legacy client path.
-                const url = name === 'image_emoticon' ? 'https://tb3.bdstatic.com/emoji/image_emoticon@2x.png'
-                    : `https://gsp0.baidu.com/5aAHeD3nKhI2p27j8IqW0jdnxx1xbK/tb/editor/images/client/${name}.png`;
+                const url = emoticon_url(name);
                 return `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${url}">`;
             }
             case 3: {
@@ -158,6 +171,16 @@ export async function collect_api(
             // Live pages can overlap. Keep the version first collected without rescanning.
             if (seen.has(id)) { continue; }
             if (floor <= Number(raw_floors.at(-1)?.floor || 0)) { throw new Error(`接口出现乱序楼层: floor=${floor}, post_id=${id}`); }
+            // Detect unsupported content on receipt, before fetching later pages.
+            try {
+                render_api_content(post.content);
+                if (post.sub_post_list) {
+                    const embedded = array(object(post.sub_post_list, 'sub_post_list').sub_post_list, 'sub_post_list.sub_post_list');
+                    for (const reply of embedded) { render_api_content(object(reply, 'sub_post').content); }
+                }
+            } catch (error) {
+                throw new Error(`第 ${floor} 楼: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+            }
             seen.add(id);
             raw_floors.push(post);
         }
@@ -201,7 +224,11 @@ export async function collect_api(
                         const id = integer(reply.id, 'sub_post.id', 1);
                         if (batch_ids.has(id)) { throw new Error('楼中楼单次响应存在重复回复 ID'); }
                         batch_ids.add(id);
-                        if (!reply_ids.has(id)) { reply_ids.add(id); replies.push(reply); }
+                        if (!reply_ids.has(id)) {
+                            render_api_content(reply.content);
+                            reply_ids.add(id);
+                            replies.push(reply);
+                        }
                     }
                     done = !flag(page.has_more, 'nestedFloor.page.has_more');
                     collection.replies = { current: completed_replies + replies.length,
