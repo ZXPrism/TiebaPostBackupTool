@@ -58,7 +58,7 @@ function emoticon_url(name: string): string {
 }
 
 /** Render supported structured content. Unknown types fail rather than disappearing from a backup. */
-export function render_api_content(value: unknown): string {
+export function render_api_content(value: unknown, warn?: (message: string) => void): string {
     return array(value, 'content').map((value, index) => {
         const item = object(value, `content[${index}]`);
         const type = integer(item.type, 'content.type');
@@ -71,6 +71,12 @@ export function render_api_content(value: unknown): string {
             case 18: return `<a href="${link(item.link, 'content.link')}" target="_blank">${escape(text(item.text, 'content.text'))}</a>`;
             case 2: {
                 const name = text(item.text, 'content.text');
+                // Verified on the actual legacy reply page (2026-10-14): the image is broken.
+                // Preserve the known label and source in the report, without downloading a substitute.
+                if (name === 'shoubai_emoji_face_365') {
+                    warn?.('表情 [好运] 的原图缺失（原网页图片地址已核实返回 HTTP 404），已保留文字；原图地址: https://gsp0.baidu.com/5aAHeD3nKhI2p27j8IqW0jdnxx1xbK/tb/editor/images/client/shoubai_emoji_face_365.png');
+                    return '[好运]';
+                }
                 const url = emoticon_url(name);
                 return `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${url}">`;
             }
@@ -85,7 +91,7 @@ export function render_api_content(value: unknown): string {
     }).join('');
 }
 
-function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: boolean): Comment {
+function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: boolean, warn: (message: string) => void): Comment {
     const id = integer(raw.author_id, 'author_id', 1);
     const user = raw.author ? object(raw.author, 'author') : users.get(id);
     if (!user) { throw new Error(`接口缺少作者信息: author_id=${id}`); }
@@ -94,7 +100,7 @@ function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: bool
     const day = nested ? date.slice(0, 10).replace(/-0/g, '-') : date.slice(0, 10);
     const raw_portrait = text(user.portrait, 'user.portrait');
     const portrait = nested ? raw_portrait.split('?')[0] : raw_portrait;
-    const content = render_api_content(raw.content);
+    const content = render_api_content(raw.content, warn);
     const reply = content.match(/回复\s+<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>\s*:/);
     return {
         author: text(nested ? user.name || user.name_show : user.name_show || user.name, 'user.name'),
@@ -243,7 +249,11 @@ export async function collect_api(
                 if (!done) { throw new Error(`楼中楼分页未结束，已达到 ${max_pages} 页限制`); }
             }
             if (new Set(replies.map(reply => integer(reply.id, 'sub_post.id', 1))).size !== replies.length) { throw new Error('楼中楼存在重复回复 ID'); }
-            floors.push({ index, comment: comment(raw, users, false), ...(replies.length ? { sub_comment_list: replies.map(reply => comment(reply, users, true)) } : {}) });
+            const warn = (message: string) => { warnings.push(`第 ${index} 楼: ${message}`); };
+            floors.push({ index, comment: comment(raw, users, false, warn), ...(replies.length ? {
+                sub_comment_list: replies.map(reply => comment(reply, users, true,
+                    message => warn(`楼中楼回复 ${reply.id}: ${message}`))),
+            } : {}) });
             completed_replies += replies.length;
         } catch (error) {
             if (signal.aborted) { signal.throwIfAborted(); }

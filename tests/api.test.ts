@@ -168,6 +168,28 @@ test('recorded Shoubai emoticon is preserved as an offline WebP image', async ()
     assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, post.floor_list[0].comment.content);
 });
 
+test('unavailable original emoticon preserves text and reports its source once per saved comment', async () => {
+    const { content, source } = JSON.parse(await readFile('tests/regression/api-unavailable-emoticon.json', 'utf8'));
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = content;
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const replayed = replay(records);
+    const result = await collect_api(baseline.id, replayed.request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    assert.equal(post.floor_list[0].comment.content, '哦，长知识了[好运]');
+    assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, '哦，长知识了[好运]');
+    assert.equal(result.warnings.length, 2, 'Early validation must not duplicate warnings');
+    assert.match(result.warnings[0], /^第 1 楼:/);
+    assert.match(result.warnings[1], /^第 21 楼: 楼中楼回复 \d+:/);
+    for (const warning of result.warnings) {
+        assert(warning.includes(source.web_image_url));
+        assert.match(warning, /\[好运\].*HTTP 404/);
+    }
+    assert(!Object.keys(post.image_map || {}).some(url => url.includes('shoubai_emoji_face_365')));
+    assert.equal(replayed.calls.length, 5, 'Missing image does not prevent completing collection');
+});
+
 test('Shoubai family uses official number formatting, supported ranges and exclusions', () => {
     for (const [name, filename] of [['4', '04'], ['04', '04'], ['1', '01'], ['229', '229'], ['367', '367'], ['370', '370']]) {
         const html = render_api_content([{ type: 2, text: `shoubai_emoji_face_${name}` }]);
