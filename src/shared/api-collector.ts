@@ -47,7 +47,9 @@ export function render_api_content(value: unknown): string {
         const type = integer(item.type, 'content.type');
         switch (type) {
             case 0:
-            case 9: return escape(text(item.text, 'content.text')).replace(/\r?\n/g, '<br>');
+            case 9:
+            case 40: // Keep keyword text without Tieba's added search link or decoration.
+                return escape(text(item.text, 'content.text')).replace(/\r?\n/g, '<br>');
             case 1: return `<a href="${link(item.link, 'content.link')}" target="_blank">${escape(text(item.text, 'content.text'))}</a>`;
             case 2: {
                 const name = text(item.text, 'content.text');

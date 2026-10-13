@@ -1,0 +1,53 @@
+{
+    "source": {
+        "thread_id": "11052619456",
+        "floor": 313,
+        "post_id": "153972603320"
+    },
+    "content": [
+        {
+            "search_type": 1,
+            "type": 40,
+            "text": "网球",
+            "link": "https://tieba.baidu.com/mo/q/hybrid-usergrow-search/searchGlobal/result?pageType=result&nonavigationbar=1&customfullscreen=1&source=forum_name_search&loadingSignal=1&keyword=网球&intervention_kw=网球",
+            "src": "https://tieba-ares.cdn.bcebos.com/mis/2024-12/1734919958661/fa9b7c214cab.png",
+            "theme_color": {
+                "day": {
+                    "common_color": "#FF335ACC"
+                },
+                "night": {
+                    "common_color": "#FF354BA3"
+                },
+                "dark": {
+                    "common_color": "#FF4463E3"
+                }
+            }
+        },
+        {
+            "type": 0,
+            "text": "风云吧好像除了"
+        },
+        {
+            "src": "https://tieba-ares.cdn.bcebos.com/mis/2024-12/1734919958661/fa9b7c214cab.png",
+            "theme_color": {
+                "day": {
+                    "common_color": "#FF335ACC"
+                },
+                "night": {
+                    "common_color": "#FF354BA3"
+                },
+                "dark": {
+                    "common_color": "#FF4463E3"
+                }
+            },
+            "search_type": 1,
+            "type": 40,
+            "text": "网球",
+            "link": "https://tieba.baidu.com/mo/q/hybrid-usergrow-search/searchGlobal/result?pageType=result&nonavigationbar=1&customfullscreen=1&source=forum_name_search&loadingSignal=1&keyword=网球&intervention_kw=网球"
+        },
+        {
+            "type": 0,
+            "text": "都聊"
+        }
+    ]
+}

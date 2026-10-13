@@ -101,6 +101,29 @@ test('recorded unnumbered emoticon survives floor/reply collection and offline i
     }
 });
 
+test('recorded search keywords retain only text and order in floors and nested replies', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-search-link.json', 'utf8'));
+    const html = '网球风云吧好像除了网球都聊';
+    assert.equal(render_api_content(content), html);
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = content;
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    assert.equal(post.floor_list[0].comment.content, html);
+    assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, html);
+    assert(!Object.keys(post.image_map || {}).includes(content[0].src), 'Search decoration is not a content image');
+    assert.deepEqual(result.warnings, []);
+    assert.equal(render_api_content([{ type: 40, text: '<b>&', link: 'https://tieba.baidu.com/?a=1&b=2' }]),
+        '&lt;b&gt;&amp;');
+    assert.equal(render_api_content([{ type: 40, text: '关键词', link: 'javascript:alert(1)' }]), '关键词');
+    assert.equal(render_api_content([{ type: 40, text: '第一行\n第二行' }]), '第一行<br>第二行');
+    assert.throws(() => render_api_content([{ type: 40, link: 'https://tieba.baidu.com/' }]), /content.text/);
+    assert.equal(render_api_content([{ type: 1, text: '原有链接', link: 'https://tieba.baidu.com/' }]),
+        '<a href="https://tieba.baidu.com/" target="_blank">原有链接</a>');
+});
+
 test('API accepts changing page and reply totals while keeping the initial thread metadata', async () => {
     for (const delta of [-1, 1]) {
         for (const field of ['total_page', 'valid_post_num', 'reply_num']) {
