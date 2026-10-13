@@ -8,18 +8,31 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "type-check": "tsc --noEmit",
-    "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix"
+    "lint": "eslint src/ scripts/",
+    "lint:fix": "eslint src/ scripts/ --fix",
+    "build:service": "tsup --config tsup.service.config.ts",
+    "build:all": "npm run build && npm run build:service",
+    "start": "npm run build:service && node --import tsx src/service/server.ts",
+    "login": "node --import tsx scripts/login.ts",
+    "login:import": "node --import tsx scripts/login.ts --import"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
     "@types/tampermonkey": "^5.0.5",
     "globals": "^17.4.0",
     "tsup": "^8.3.5",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.57.2"
+  },
+  "dependencies": {
+    "playwright": "^1.64.0"
+  },
+  "engines": {
+    "node": ">=22.16.0"
   }
 }

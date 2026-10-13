@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>贴吧帖子备份</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+</head>
+<body>
+    <main>
+        <header><span class="eyebrow">TIEBA ARCHIVE</span><h1>留住值得保存的讨论。</h1><p>提交帖子链接，由服务完成采集。下载后，随时离线阅读。</p></header>
+        <section class="panel" aria-labelledby="form-title">
+            <h2 id="form-title">备份一个帖子</h2>
+            <form id="backup-form">
+                <label for="post-url">帖子链接或 ID</label>
+                <div class="input-row"><input id="post-url" name="url" placeholder="https://tieba.baidu.com/p/…" required autocomplete="off"><button id="submit" type="submit">开始备份 <span aria-hidden="true">→</span></button></div>
+                <p class="hint">任务按顺序处理，关闭页面不影响已提交的备份。</p>
+            </form>
+            <p id="message" role="status" aria-live="polite"></p>
+        </section>
+        <section aria-labelledby="jobs-title"><div class="section-heading"><h2 id="jobs-title">备份任务</h2><span id="connection">正在连接…</span></div><div id="jobs"><p class="empty">正在读取任务…</p></div></section>
+        <footer>备份包含帖子数据、图片和离线阅读页面。下载 TAR 后解压，打开 viewer.html 即可阅读。</footer>
+    </main>
+</body>
+</html>
