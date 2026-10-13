@@ -97,12 +97,12 @@ export async function collect_api(
     const seen = new Set<number>();
     const warnings: string[] = [];
     let metadata: Collection['metadata'] | undefined;
-    let expected_count = 0;
+    let page_total: number | undefined;
     let last_pid: number | undefined;
     let finished = false;
     for (let number = 1; number <= max_pages; number++) {
         signal.throwIfAborted();
-        await progress({ stage: '采集帖子', current: number, total: metadata?.page_cnt });
+        await progress({ stage: '采集帖子', current: number, total: page_total });
         const result = object(await request('/c/f/pb/page_pc', {
             kz: String(post_id), ...(last_pid ? { last_pid: String(last_pid) } : { pn: '1' }),
             lz: '0', r: '0', mark_type: '0', back: '0', fr: '', session_request_times: '1',
@@ -119,36 +119,43 @@ export async function collect_api(
         }
         const total = integer(page.total_page, 'page.total_page', 1);
         if (total > max_pages) { throw new Error(`接口页数 ${total} 超过 ${max_pages} 页限制`); }
+        page_total = total;
+        integer(thread.valid_post_num, 'thread.valid_post_num', 1);
+        const reply_count = integer(thread.reply_num, 'thread.reply_num');
         if (!metadata) {
             const forum = object(result.forum, 'forum');
             const name = text(forum.name, 'forum.name');
             metadata = {
                 id: post_id, title: text(thread.title, 'thread.title'), tieba_name: `${name}吧`,
                 tieba_url: `https://tieba.baidu.com/f?kw=${encodeURIComponent(name)}&ie=utf-8`,
-                page_cnt: total, comment_cnt: integer(thread.reply_num, 'thread.reply_num'),
+                page_cnt: total, comment_cnt: reply_count,
             };
-            expected_count = integer(thread.valid_post_num, 'thread.valid_post_num', 1);
-        } else if (total !== metadata.page_cnt || integer(thread.valid_post_num, 'thread.valid_post_num', 1) !== expected_count
-            || integer(thread.reply_num, 'thread.reply_num') !== metadata.comment_cnt) {
-            throw new Error('采集期间接口帖子数量发生变化，请重新备份');
         }
         const posts = array(result.post_list, 'post_list').map(value => object(value, 'post'));
         const batch = number === 1 ? [object(result.first_floor, 'first_floor'), ...posts] : posts;
         if (number === 1 && integer(batch[0].floor, 'first_floor.floor', 1) !== 1) { throw new Error('接口未返回第 1 楼，无法完整备份'); }
+        const batch_ids = new Set<number>();
+        let previous_floor = 0;
+        const previous_count = raw_floors.length;
         for (const post of batch) {
             const id = integer(post.id, 'post.id', 1);
             const floor = integer(post.floor, 'post.floor', 1);
-            if (seen.has(id) || floor <= Number(raw_floors.at(-1)?.floor || 0)) { throw new Error(`接口出现重复或乱序楼层: floor=${floor}, post_id=${id}`); }
+            if (batch_ids.has(id) || floor <= previous_floor) { throw new Error(`接口单次响应出现重复或乱序楼层: floor=${floor}, post_id=${id}`); }
+            batch_ids.add(id);
+            previous_floor = floor;
             if (post.is_fold !== undefined && flag(post.is_fold, 'post.is_fold')) { throw new Error(`第 ${floor} 楼已折叠，无法完整备份`); }
+            // Live pages can overlap. Keep the version first collected without rescanning.
+            if (seen.has(id)) { continue; }
+            if (floor <= Number(raw_floors.at(-1)?.floor || 0)) { throw new Error(`接口出现乱序楼层: floor=${floor}, post_id=${id}`); }
             seen.add(id);
             raw_floors.push(post);
         }
         if (!flag(page.has_more, 'page.has_more')) { finished = true; break; }
         if (!posts.length) { throw new Error('接口声明还有下一页，但当前楼层列表为空'); }
+        if (raw_floors.length === previous_count) { throw new Error('接口楼层分页游标未前进'); }
         last_pid = integer(posts[posts.length - 1].id, 'last_pid', 1);
     }
     if (!finished || !metadata) { throw new Error(`接口分页未结束，已达到 ${max_pages} 页限制`); }
-    if (raw_floors.length !== expected_count) { throw new Error(`接口楼层不完整: 应有 ${expected_count} 楼，实际 ${raw_floors.length} 楼`); }
     const floors: Floor[] = [];
     for (const raw of raw_floors) {
         const index = integer(raw.floor, 'floor', 1);
@@ -159,6 +166,7 @@ export async function collect_api(
                 ? array(object(raw.sub_post_list, 'sub_post_list').sub_post_list, 'sub_post_list.sub_post_list').map(value => object(value, 'sub_post')) : [];
             if (replies.length < count) {
                 replies = [];
+                const reply_ids = new Set<number>();
                 let offset = 0;
                 let done = false;
                 for (let number = 1; number <= max_pages; number++) {
@@ -167,7 +175,13 @@ export async function collect_api(
                     const result = object(await request('/c/f/pb/nestedFloor', { thread_id: String(post_id), post_id: String(raw.id), offset: String(offset) }), 'nestedFloor');
                     const page = object(result.page, 'nestedFloor.page');
                     const batch = array(result.post_list, 'nestedFloor.post_list').map(value => object(value, 'sub_post'));
-                    replies.push(...batch);
+                    const batch_ids = new Set<number>();
+                    for (const reply of batch) {
+                        const id = integer(reply.id, 'sub_post.id', 1);
+                        if (batch_ids.has(id)) { throw new Error('楼中楼单次响应存在重复回复 ID'); }
+                        batch_ids.add(id);
+                        if (!reply_ids.has(id)) { reply_ids.add(id); replies.push(reply); }
+                    }
                     if (!flag(page.has_more, 'nestedFloor.page.has_more')) { done = true; break; }
                     const next = integer(page.offset, 'nestedFloor.page.offset', 1);
                     if (!batch.length || next <= offset) { throw new Error('楼中楼分页游标未前进'); }
@@ -175,9 +189,8 @@ export async function collect_api(
                 }
                 if (!done) { throw new Error(`楼中楼分页未结束，已达到 ${max_pages} 页限制`); }
             }
-            if (replies.length !== count) { throw new Error(`楼中楼数量不符: 应有 ${count} 条，实际 ${replies.length} 条`); }
             if (new Set(replies.map(reply => integer(reply.id, 'sub_post.id', 1))).size !== replies.length) { throw new Error('楼中楼存在重复回复 ID'); }
-            floors.push({ index, comment: comment(raw, users, false), ...(count ? { sub_comment_list: replies.map(reply => comment(reply, users, true)) } : {}) });
+            floors.push({ index, comment: comment(raw, users, false), ...(replies.length ? { sub_comment_list: replies.map(reply => comment(reply, users, true)) } : {}) });
         } catch (error) {
             if (signal.aborted) { signal.throwIfAborted(); }
             throw new Error(`第 ${index} 楼: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

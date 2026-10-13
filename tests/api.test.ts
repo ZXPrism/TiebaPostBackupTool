@@ -76,10 +76,102 @@ test('space rule is narrow, auditable and reversible with strict mode', () => {
     assert(regression_report(baseline, actual).differences.length > 1);
 });
 
-test('API refuses truncated, duplicate, hidden or unknown data instead of returning complete', async () => {
+test('API accepts changing page and reply totals while keeping the initial thread metadata', async () => {
+    for (const delta of [-1, 1]) {
+        for (const field of ['total_page', 'valid_post_num', 'reply_num']) {
+            const records = structuredClone(fixtures);
+            const data = records[1].response;
+            const summary = (field === 'total_page' ? data.page : data.thread) as Record<string, number>;
+            summary[field] = Number(summary[field]) + delta;
+            const { request, calls } = replay(records);
+            const result = await collect_api(baseline.id, request, progress, signal);
+            assert.equal(calls.length, 5);
+            assert.equal(result.floors.length, 28);
+            assert.equal(result.floors.flatMap(f => f.sub_comment_list || []).length, 36);
+            assert.equal(result.metadata.page_cnt, 2);
+            assert.deepEqual(result.warnings, []);
+        }
+    }
+});
+
+test('API accepts edits, overlapping pages and new floors without replacing collected content', async () => {
+    const records = structuredClone(fixtures);
+    const first = records[0].response.post_list as Record<string, unknown>[];
+    const second = records[1].response.post_list as Record<string, unknown>[];
+    const overlap = structuredClone(first[first.length - 1]);
+    const original_content = render_api_content(overlap.content);
+    overlap.content = [{ type: 0, text: 'edited after collection' }];
+    second[0].content = [{ type: 0, text: 'edited before collection' }];
+    const added = { ...structuredClone(second[second.length - 1]), id: 999999999999, floor: 31, content: [{ type: 0, text: 'new floor' }], sub_post_number: 0, sub_post_list: undefined };
+    second.unshift(overlap);
+    second.push(added);
+    const { request, calls } = replay(records);
+    const result = await collect_api(baseline.id, request, progress, signal);
+    assert.equal(calls.length, 5);
+    assert.equal(result.floors.length, 29);
+    assert.equal(result.floors.find(f => f.index === Number(overlap.floor))?.comment.content, original_content);
+    assert.equal(result.floors.find(f => f.index === Number(second[1].floor))?.comment.content, 'edited before collection');
+    assert.equal(result.floors.at(-1)?.comment.content, 'new floor');
+    assert.deepEqual(result.warnings, []);
+});
+
+test('API accepts a final page emptied by deletions', async () => {
+    const records = structuredClone(fixtures);
+    records[1].response.post_list = [];
+    const { request, calls } = replay(records);
+    const result = await collect_api(baseline.id, request, progress, signal);
+    assert.equal(calls.length, 2);
+    assert.equal(result.floors.length, 15);
+    assert.deepEqual(result.warnings, []);
+});
+
+test('API follows nested pagination despite additions, deletions and overlapping replies', async () => {
+    for (const scenario of ['added', 'deleted', 'empty', 'overlap']) {
+        const records = structuredClone(fixtures);
+        const pages = records.filter(f => f.parameters.post_id === '54651409834');
+        const first = pages[0].response.data as Record<string, unknown>;
+        const second = pages[1].response.data as Record<string, unknown>;
+        const first_replies = first.post_list as Record<string, unknown>[];
+        const second_replies = second.post_list as Record<string, unknown>[];
+        const last_reply = first_replies[first_replies.length - 1];
+        const original_content = render_api_content(last_reply.content);
+        if (scenario === 'added') {
+            second_replies.push({ ...structuredClone(second_replies[second_replies.length - 1]), id: 999999999999, content: [{ type: 0, text: 'new reply' }] });
+        } else if (scenario === 'deleted') {
+            second.post_list = [];
+        } else if (scenario === 'empty') {
+            first.post_list = [];
+            first.page = { has_more: 0, offset: 0 };
+        } else {
+            second_replies.unshift({ ...structuredClone(last_reply), content: [{ type: 0, text: 'edited reply' }] });
+        }
+        const { request, calls } = replay(records);
+        const result = await collect_api(baseline.id, request, progress, signal);
+        const replies = result.floors.find(f => f.index === 21)?.sub_comment_list || [];
+        assert.equal(replies.length, { added: 19, deleted: 10, empty: 0, overlap: 18 }[scenario]);
+        assert.equal(calls.length, scenario === 'empty' ? 4 : 5);
+        if (scenario === 'added') { assert.equal(replies.at(-1)?.content, 'new reply'); }
+        if (scenario === 'overlap') { assert.equal(replies[9].content, original_content); }
+        assert.deepEqual(result.warnings, []);
+    }
+});
+
+test('API refuses stalled pagination, inconsistent individual responses, hidden or unknown data', async () => {
     for (const [change, pattern] of [
-        [(r: typeof fixtures) => { r[1].response.post_list = []; }, /楼层不完整/],
-        [(r: typeof fixtures) => { r[1].response.post_list = r[0].response.post_list; }, /重复或乱序/],
+        [(r: typeof fixtures) => { r[0].response.post_list = []; }, /还有下一页.*列表为空/],
+        [(r: typeof fixtures) => {
+            r[1].response.post_list = r[0].response.post_list;
+            (r[1].response.page as Record<string, unknown>).has_more = 1;
+        }, /楼层分页游标未前进/],
+        [(r: typeof fixtures) => {
+            const posts = r[1].response.post_list as unknown[];
+            posts.push(posts[0]);
+        }, /单次响应.*重复或乱序/],
+        [(r: typeof fixtures) => {
+            const data = r[2].response.data as Record<string, unknown>;
+            const posts = data.post_list as unknown[];
+            posts.push(posts[0]);
+        }, /第 21 楼.*单次响应.*重复回复 ID/],
         [(r: typeof fixtures) => { r[0].response.has_fold_comment = 1; }, /折叠内容/],
         [(r: typeof fixtures) => { (r[0].response.thread as Record<string, unknown>).is_partial_visible = 1; }, /部分内容可见/],
         [(r: typeof fixtures) => { (r[0].response.first_floor as Record<string, unknown>).content = [{ type: 99 }]; }, /第 1 楼.*type=99/],
