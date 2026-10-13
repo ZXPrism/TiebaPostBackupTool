@@ -36,20 +36,37 @@ export function sign_form(parameters: Record<string, string>): Record<string, st
     return { ...form, sign: createHash('md5').update(signature).digest('hex') };
 }
 
+class RetryableApiError extends Error {
+    constructor(message: string, readonly retry_after_ms = 0) { super(message); }
+}
+
+function retry_after(value: string | undefined): number {
+    if (!value) { return 0; }
+    const milliseconds = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+    return Number.isFinite(milliseconds) ? Math.max(0, milliseconds) : 0;
+}
+
 export function create_api_request(context: APIRequestContext, post_url: string, pacer: RequestPacer, signal: AbortSignal): ApiRequest {
-    return (path, parameters) => pacer.run(async () => {
+    const attempt: ApiRequest = async (path, parameters) => {
+        const transport_error = (error: unknown): never => {
+            signal.throwIfAborted();
+            // Avoid Playwright's request log, which may include headers/session data.
+            const detail = error instanceof Error ? error.message.split('\n')[0].replace(/^apiRequestContext\.(post|text): /, '') : '未知传输错误';
+            throw new RetryableApiError(`${path}: 请求失败，${detail}`);
+        };
         const response = await context.post(`https://tieba.baidu.com${path}`, {
             form: sign_form(parameters),
             headers: { Referer: post_url, 'X-Requested-With': 'XMLHttpRequest' },
             timeout: 30000, maxRedirects: 0, maxRetries: 0,
-        }).catch(error => {
-            // Avoid Playwright's request log, which may include headers/session data.
-            const detail = error instanceof Error ? error.message.split('\n')[0].replace(/^apiRequestContext\.post: /, '') : '未知传输错误';
-            throw new Error(`${path}: 请求失败，${detail}`);
-        });
+        }).catch(transport_error);
         try {
+            signal.throwIfAborted();
+            if ([408, 429, 500, 502, 503, 504].includes(response.status())) {
+                throw new RetryableApiError(`${path}: HTTP ${response.status()}`, retry_after(response.headers()['retry-after']));
+            }
             if (response.status() !== 200) { throw new Error(`${path}: HTTP ${response.status()}`); }
-            const body = await response.text();
+            const body = await response.text().catch(transport_error);
+            signal.throwIfAborted();
             let value: unknown;
             try { value = JSON.parse(body); }
             catch {
@@ -64,5 +81,24 @@ export function create_api_request(context: APIRequestContext, post_url: string,
             }
             return result.data ?? result;
         } finally { await response.dispose(); }
-    }, signal);
+    };
+    return async (path, parameters) => {
+        for (let retries = 0; ; retries++) {
+            try {
+                // Every attempt uses the shared pacer; Playwright's own retries stay disabled.
+                return await pacer.run(() => attempt(path, parameters), signal);
+            } catch (error) {
+                signal.throwIfAborted();
+                if (!(error instanceof RetryableApiError)) { throw error; }
+                if (retries === 3) { throw new Error(`${error.message}（已重试 3 次，共 4 次请求）`, { cause: error }); }
+                // A server-requested delay is additional to the pacer's minimum start interval.
+                let wait = error.retry_after_ms;
+                while (wait > 0) {
+                    const chunk = Math.min(wait, 2147483647);
+                    await delay(chunk, undefined, { signal });
+                    wait -= chunk;
+                }
+            }
+        }
+    };
 }

@@ -354,12 +354,13 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
     assert.equal(attempts, 1, 'Stop further image requests after the first failure');
 });
 
-test('API request signing, response validation, and no retries', async () => {
+test('API request signing and non-retryable response validation', async () => {
     const form = sign_form({ kz: '123', pn: '1' });
     assert.equal(form.sign, createHash('md5').update('_client_type=20kz=123pn=1subapp_type=pctbs=36770b1f34c9bbf2e7d1a99d2b82fa9e').digest('hex'));
     const cases = [
         { status: 403, body: '<title>百度安全验证</title>', error: /HTTP 403/ },
-        { status: 429, body: '{}', error: /HTTP 429/ },
+        { status: 400, body: '{}', error: /HTTP 400/ },
+        { status: 404, body: '{}', error: /HTTP 404/ },
         { status: 302, body: '', error: /HTTP 302/ },
         { status: 200, body: '<title>百度安全验证</title>', error: /返回百度安全验证页面/ },
         { status: 200, body: '{', error: /不是 JSON/ },
@@ -382,6 +383,102 @@ test('API request signing, response validation, and no retries', async () => {
         else { assert.deepEqual(await result, { post_list: [] }); }
         assert.equal(requests, 1);
         assert.equal(disposed, 1);
+    }
+});
+
+test('API retries temporary failures at most three times through the shared request interval', async () => {
+    for (const path of ['/c/f/pb/page_pc', '/c/f/pb/nestedFloor'] as const) {
+        for (const failure of ['timeout', 'connection', 'body', 408, 429, 500, 502, 503, 504]) {
+            for (const recover of [false, true]) {
+                let now = 0, calls = 0, disposed = 0;
+                const starts: number[] = [];
+                const pacer = new RequestPacer(1500, () => now, async ms => { now += ms; });
+                const parameters = { thread_id: '123', post_id: '456', offset: '10' };
+                const context = { post: async (url: string, options: { form: unknown; maxRetries: number }) => {
+                    calls++;
+                    starts.push(now);
+                    now += 100;
+                    assert.equal(url, `https://tieba.baidu.com${path}`);
+                    assert.deepEqual(options.form, sign_form(parameters), 'Retry the same page/cursor');
+                    assert.equal(options.maxRetries, 0, 'No hidden retries outside the pacer');
+                    const failing = !recover || calls < 4;
+                    if (failing && failure === 'timeout') { throw new Error('apiRequestContext.post: Timeout 30000ms exceeded\nCall log:\nCookie: private'); }
+                    if (failing && failure === 'connection') { throw new Error('apiRequestContext.post: ECONNRESET'); }
+                    return {
+                        status: () => failing && typeof failure === 'number' ? failure : 200,
+                        headers: () => ({}),
+                        text: async () => {
+                            if (failing && failure === 'body') { throw new Error('ECONNRESET\nCookie: private'); }
+                            return '{"error_code":0,"data":{"post_list":[]}}';
+                        },
+                        dispose: async () => { disposed++; },
+                    } as unknown as APIResponse;
+                } } as unknown as APIRequestContext;
+                const result = create_api_request(context, 'https://tieba.baidu.com/p/123', pacer, signal)(path, parameters);
+                if (recover) { assert.deepEqual(await result, { post_list: [] }); }
+                else {
+                    await assert.rejects(result, error => {
+                        assert(error instanceof Error);
+                        assert.match(error.message, /已重试 3 次，共 4 次请求/);
+                        assert(error.message.includes(path));
+                        assert(error.message.includes(typeof failure === 'number' ? `HTTP ${failure}` : failure === 'timeout' ? 'Timeout' : 'ECONNRESET'));
+                        assert(!error.message.includes('private'));
+                        return true;
+                    });
+                }
+                assert.equal(calls, 4);
+                assert.deepEqual(starts, [0, 1500, 3000, 4500]);
+                assert.equal(disposed, failure === 'timeout' || failure === 'connection' ? (recover ? 1 : 0) : 4);
+                await pacer.run(async () => { starts.push(now); }, signal);
+                assert.equal(starts.at(-1), 6000, 'Retries retain the shared interval for the next request');
+            }
+        }
+    }
+});
+
+test('API stops retrying on a terminal response or cancellation during the interval', async () => {
+    let calls = 0, disposed = 0;
+    const context = { post: async () => {
+        calls++;
+        return { status: () => calls === 1 ? 503 : 403, headers: () => ({}), dispose: async () => { disposed++; } };
+    } } as unknown as APIRequestContext;
+    await assert.rejects(create_api_request(context, '', new RequestPacer(0), signal)('/c/f/pb/page_pc', {}), /HTTP 403/);
+    assert.equal(calls, 2);
+    assert.equal(disposed, 2);
+
+    const controller = new AbortController();
+    calls = 0;
+    const pacer = new RequestPacer(1000, () => 0, async () => { controller.abort(new Error('停止测试任务')); });
+    await assert.rejects(create_api_request(context, '', pacer, controller.signal)('/c/f/pb/page_pc', {}), /停止测试任务/);
+    assert.equal(calls, 1, 'Cancellation while waiting prevents the next attempt');
+});
+
+test('API respects Retry-After and allows cancellation of server-requested waits', async () => {
+    const starts: number[] = [];
+    const context = { post: async () => {
+        starts.push(Date.now());
+        return {
+            status: () => starts.length === 1 ? 429 : 200,
+            headers: () => ({ 'retry-after': '1' }), text: async () => '{"error_code":0}', dispose: async () => undefined,
+        };
+    } } as unknown as APIRequestContext;
+    await create_api_request(context, '', new RequestPacer(25), signal)('/c/f/pb/page_pc', {});
+    assert.equal(starts.length, 2);
+    assert(starts[1] - starts[0] >= 1000, 'Server wait also applies when it exceeds the collection interval');
+
+    for (const header of ['60', new Date(Date.now() + 120000).toUTCString()]) {
+        const controller = new AbortController();
+        let calls = 0;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const context = { post: async () => {
+            calls++;
+            timer = setTimeout(() => controller.abort(), 10);
+            return { status: () => 503, headers: () => ({ 'retry-after': header }), dispose: async () => undefined };
+        } } as unknown as APIRequestContext;
+        try {
+            await assert.rejects(create_api_request(context, '', new RequestPacer(0), controller.signal)('/c/f/pb/page_pc', {}), /abort/i);
+            assert.equal(calls, 1);
+        } finally { clearTimeout(timer); }
     }
 });
 

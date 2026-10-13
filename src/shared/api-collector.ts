@@ -92,7 +92,7 @@ function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: bool
     };
 }
 
-/** Transport-independent collector; no page navigation and no implicit retry/fallback. */
+/** Transport-independent collector; request retries belong to the transport, with no page fallback. */
 export async function collect_api(
     post_id: number, request: ApiRequest,
     progress: (value: Progress) => Promise<void>,
