@@ -192,7 +192,7 @@ test('stalled sub-comment pagination produces an explicit partial result', { tim
 });
 
 test('offline viewer renders baseline and cannot execute markup embedded in data', async () => {
-    const baseline = JSON.parse(await readFile('test/post.json', 'utf8')) as Post;
+    const baseline = JSON.parse(await readFile('tests/regression/post.json', 'utf8')) as Post;
     baseline.title = '</script><script>window.PWNED=true</script>';
     baseline.floor_list[0].comment.author = '<img src=x onerror="window.PWNED=true">';
     baseline.floor_list[0].comment.content += '<img src=x onerror="window.PWNED=true"><script>window.PWNED=true</script>';
@@ -208,7 +208,7 @@ test('offline viewer renders baseline and cannot execute markup embedded in data
 });
 
 test('API result renders all floors and nested replies in the shared offline viewer', async () => {
-    const fixtures = JSON.parse(await readFile('test/api-responses.json', 'utf8')) as {
+    const fixtures = JSON.parse(await readFile('tests/regression/api-responses.json', 'utf8')) as {
         path: string; parameters: Record<string, string>; response: { data?: unknown };
     }[];
     const result = await collect_api(3022463586, async (path, parameters) => {

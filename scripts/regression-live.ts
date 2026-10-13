@@ -10,9 +10,9 @@ import type { Post } from '../src/types';
 const args = process.argv.slice(2);
 if (args.some(arg => arg.startsWith('--') && !['--normalize-images', '--strict'].includes(arg))
     || args.filter(arg => !arg.startsWith('--')).length > 1) {
-    throw new Error('用法: npm run regression:live -- [test/post.json] [--normalize-images] [--strict]；后端由 TIEBA_BACKEND 选择');
+    throw new Error('用法: npm run regression:live -- [tests/regression/post.json] [--normalize-images] [--strict]；后端由 TIEBA_BACKEND 选择');
 }
-const baseline_path = args.find(arg => !arg.startsWith('--')) || 'test/post.json';
+const baseline_path = args.find(arg => !arg.startsWith('--')) || 'tests/regression/post.json';
 const baseline = JSON.parse(await readFile(baseline_path, 'utf8')) as Post;
 const post = parse_post_url(String(baseline.id));
 const now = new Date().toISOString();

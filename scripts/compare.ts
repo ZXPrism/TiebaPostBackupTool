@@ -4,7 +4,7 @@ import { regression_report } from '../src/shared/regression';
 const args = process.argv.slice(2);
 const paths = args.filter(arg => !arg.startsWith('--'));
 if (paths.length !== 2 || args.some(arg => arg.startsWith('--') && !['--normalize-images', '--strict'].includes(arg))) {
-    console.error('用法: npm run regression -- test/post.json <实际post.json> [--normalize-images] [--strict]');
+    console.error('用法: npm run regression -- tests/regression/post.json <实际post.json> [--normalize-images] [--strict]');
     process.exitCode = 2;
 } else {
     const [expected, actual] = await Promise.all(paths.map(async path => JSON.parse(await readFile(path, 'utf8'))));

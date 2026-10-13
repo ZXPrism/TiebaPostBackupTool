@@ -15,10 +15,10 @@ import { JobQueue } from '../src/service/queue';
 import { config } from '../src/service/config';
 import type { Post } from '../src/types';
 
-const fixtures = JSON.parse(await readFile('test/api-responses.json', 'utf8')) as {
+const fixtures = JSON.parse(await readFile('tests/regression/api-responses.json', 'utf8')) as {
     path: string; parameters: Record<string, string>; response: Record<string, unknown>;
 }[];
-const baseline = JSON.parse(await readFile('test/post.json', 'utf8')) as Post;
+const baseline = JSON.parse(await readFile('tests/regression/post.json', 'utf8')) as Post;
 const signal = new AbortController().signal;
 const progress = async () => undefined;
 
@@ -78,7 +78,7 @@ test('space rule is narrow, auditable and reversible with strict mode', () => {
 
 test('recorded unnumbered emoticon survives floor/reply collection and offline image mapping', async () => {
     // Content item from thread 11052619456, floor 85, nested offset 10.
-    const { content } = JSON.parse(await readFile('test/api-unnumbered-emoticon.json', 'utf8'));
+    const { content } = JSON.parse(await readFile('tests/regression/api-unnumbered-emoticon.json', 'utf8'));
     const url = 'https://tb3.bdstatic.com/emoji/image_emoticon@2x.png';
     const html = `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${url}">`;
     assert.equal(render_api_content(content), html);

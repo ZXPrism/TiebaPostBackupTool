@@ -65,7 +65,7 @@ TIEBA_BACKEND=api TIEBA_API_INTERVAL_MS=1000 TIEBA_IMAGE_INTERVAL_MS=200 npm sta
 
 ## 回归测试
 
-`test/post.json` 是由原插件生成的固定参考文件，测试不会覆盖它。当前覆盖 28 个楼层、36 条楼中楼和 24 项图片映射；这是单页帖子，没有显式的回复对象字段。跨页与延迟楼中楼加载由额外的离线浏览器场景覆盖。
+`tests/regression/post.json` 是由原插件生成的固定参考文件，测试不会覆盖它。当前覆盖 28 个楼层、36 条楼中楼和 24 项图片映射；这是单页帖子，没有显式的回复对象字段。跨页与延迟楼中楼加载由额外的离线浏览器场景覆盖。
 
 ```sh
 # 类型、风格，以及离线单元/浏览器集成测试（需要安装 Chromium，无需百度登录）
@@ -74,28 +74,28 @@ npm run lint
 npm test
 
 # 比较实际 JSON：只允许普通正文中连续 ASCII 空格数量不同
-npm run regression -- test/post.json /path/to/actual/post.json
+npm run regression -- tests/regression/post.json /path/to/actual/post.json
 
 # 禁用空格规则，恢复严格比较
-npm run regression -- test/post.json /path/to/actual/post.json --strict
+npm run regression -- tests/regression/post.json /path/to/actual/post.json --strict
 
 # 如确实只允许图片命名不同，可以显式按 image_map 还原原始 URL 后比较
-npm run regression -- test/post.json /path/to/actual/post.json --normalize-images
+npm run regression -- tests/regression/post.json /path/to/actual/post.json --normalize-images
 
 # 登录之后，停止备份服务，直接 headless 采集参考帖子并比较
-npm run regression:live -- test/post.json
+npm run regression:live -- tests/regression/post.json
 
 # 用接口后端执行真实回归（会使用登录账号并下载图片；采用上述间隔）
-TIEBA_BACKEND=api npm run regression:live -- test/post.json
+TIEBA_BACKEND=api npm run regression:live -- tests/regression/post.json
 ```
 
 比较忽略对象键顺序，保留所有字段、数组顺序、HTML 内容和楼层跳号。唯一默认接受的内容差异是普通正文中连续 ASCII 空格的数量：多个空格与一个空格等价，但不会删除空格，也不合并换行、制表符或全角空格；HTML 属性和 `pre`/`code` 等保留空白的区域不适用。不忽略日期、作者、IP 属地、回复关系等差异。`--normalize-images` 仍是显式选项，按完整原始 URL 比较，不将不同尺寸或不同时间戳的 URL 自动视为一致。
 
 命令报告严格差异、接受的空格差异及剩余差异。剩余差异返回非零退出码并指出字段路径。真实回归还会在有采集警告（含图片失败）时失败，将结果、剩余 `diff.json` 和包含严格/接受/剩余差异的 `regression.json` 写入新的回归目录。
 
-`test/api-responses.json` 保存本次回归帖的 5 份内容接口响应，已去除登录用户、会话及与采集无关的字段。`npm test` 离线重放它们，验证 28 个楼层、36 条楼中楼、分页完整性、错误处理、服务打包及 HTML 渲染，不访问百度账号。当前接口结果相对插件基准有 76 处严格差异，其中 1 处连续空格差异获接受，剩余 75 处仍报告（页数、回复总数、昵称、HTML 及图片/主页 URL）。这些离线测试通过表示采集器行为符合记录，不代表跨后端回归已经通过。基准文件不会被改写。
+`tests/regression/api-responses.json` 保存本次回归帖的 5 份内容接口响应，已去除登录用户、会话及与采集无关的字段。`npm test` 离线重放它们，验证 28 个楼层、36 条楼中楼、分页完整性、错误处理、服务打包及 HTML 渲染，不访问百度账号。当前接口结果相对插件基准有 76 处严格差异，其中 1 处连续空格差异获接受，剩余 75 处仍报告（页数、回复总数、昵称、HTML 及图片/主页 URL）。这些离线测试通过表示采集器行为符合记录，不代表跨后端回归已经通过。基准文件不会被改写。
 
-`test/api-unnumbered-emoticon.json` 保留帖子 `11052619456` 第 85 楼楼中楼中触发错误的表情字段，验证无数字后缀的 `image_emoticon`（呵呵）能够采集、转换并映射到离线图片。该表情使用贴吧当前的官方图片地址；旧的 `client/image_emoticon.png` 地址返回 404。
+`tests/regression/api-unnumbered-emoticon.json` 保留帖子 `11052619456` 第 85 楼楼中楼中触发错误的表情字段，验证无数字后缀的 `image_emoticon`（呵呵）能够采集、转换并映射到离线图片。该表情使用贴吧当前的官方图片地址；旧的 `client/image_emoticon.png` 地址返回 404。
 
 验收分两步：更新后的插件输出对照参考文件；服务端输出对照同一参考文件。离线测试中的页面是可控的合成场景，不能替代真实贴吧回归。帖子本身被编辑、回复变化、账号可见性变化等也可能导致差异，应人工判定原因，不自动更新基准。
 

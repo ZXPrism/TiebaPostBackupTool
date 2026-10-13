@@ -12,7 +12,7 @@ import { parse_post_url } from '../src/service/model';
 import { allowed_url } from '../src/service/browser';
 import { JobQueue } from '../src/service/queue';
 
-const bytes = await readFile('test/post.json');
+const bytes = await readFile('tests/regression/post.json');
 const baseline = JSON.parse(bytes.toString()) as Post;
 
 test('reference JSON stays unchanged; image mapping round trip preserves every field', () => {
