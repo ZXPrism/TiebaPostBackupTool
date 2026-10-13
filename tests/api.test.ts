@@ -218,6 +218,18 @@ test('recorded search keywords retain only text and order in floors and nested r
         '<a href="https://tieba.baidu.com/" target="_blank">原有链接</a>');
 });
 
+test('recorded topic links retain hashtag text and the original destination', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-topic-link.json', 'utf8'));
+    const html = render_api_content(content);
+    assert(html.startsWith('<a href="https://tieba.baidu.com/mo/q/hotMessage?'));
+    assert(html.endsWith('" target="_blank"># 王一涵六六 #</a>'));
+    const href = html.match(/href="([^"]+)"/)?.[1].replaceAll('&amp;', '&');
+    assert(href);
+    assert.equal(new URL(href).searchParams.get('topic_name'), ' 王一涵六六 ');
+    assert.equal(new URL(href).searchParams.get('fid'), '3048214');
+    assert.throws(() => render_api_content([{ type: 18, text: '#x#', link: 'javascript:alert(1)' }]), /HTTP/);
+});
+
 test('API accepts changing page and reply totals while keeping the initial thread metadata', async () => {
     for (const delta of [-1, 1]) {
         for (const field of ['total_page', 'valid_post_num', 'reply_num']) {
