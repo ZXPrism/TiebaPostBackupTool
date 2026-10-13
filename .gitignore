@@ -10,7 +10,9 @@ bits
 .cph
 dist
 node_modules
-test
+/test/*
+!/test/post.json
+!/test/api-responses.json
 
 .data/
 .env
