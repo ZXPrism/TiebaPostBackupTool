@@ -7,6 +7,7 @@ export interface Collection {
     metadata: Omit<Post, 'floor_list' | 'image_map'>;
     floors: Floor[];
     warnings: string[];
+    notes: string[];
 }
 type RecordValue = Record<string, unknown>;
 
@@ -58,7 +59,7 @@ function emoticon_url(name: string): string {
 }
 
 /** Render supported structured content. Unknown types fail rather than disappearing from a backup. */
-export function render_api_content(value: unknown, warn?: (message: string) => void): string {
+export function render_api_content(value: unknown, note?: (message: string) => void): string {
     return array(value, 'content').map((value, index) => {
         const item = object(value, `content[${index}]`);
         const type = integer(item.type, 'content.type');
@@ -74,7 +75,7 @@ export function render_api_content(value: unknown, warn?: (message: string) => v
                 // Verified on the actual legacy reply page (2026-10-14): the image is broken.
                 // Preserve the known label and source in the report, without downloading a substitute.
                 if (name === 'shoubai_emoji_face_365') {
-                    warn?.('表情 [好运] 的原图缺失（原网页图片地址已核实返回 HTTP 404），已保留文字；原图地址: https://gsp0.baidu.com/5aAHeD3nKhI2p27j8IqW0jdnxx1xbK/tb/editor/images/client/shoubai_emoji_face_365.png');
+                    note?.('表情 [好运] 的原图缺失（原网页图片地址已核实返回 HTTP 404），已保留文字；原图地址: https://gsp0.baidu.com/5aAHeD3nKhI2p27j8IqW0jdnxx1xbK/tb/editor/images/client/shoubai_emoji_face_365.png');
                     return '[好运]';
                 }
                 const url = emoticon_url(name);
@@ -91,7 +92,7 @@ export function render_api_content(value: unknown, warn?: (message: string) => v
     }).join('');
 }
 
-function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: boolean, warn: (message: string) => void): Comment {
+function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: boolean, note: (message: string) => void): Comment {
     const id = integer(raw.author_id, 'author_id', 1);
     const user = raw.author ? object(raw.author, 'author') : users.get(id);
     if (!user) { throw new Error(`接口缺少作者信息: author_id=${id}`); }
@@ -100,7 +101,7 @@ function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: bool
     const day = nested ? date.slice(0, 10).replace(/-0/g, '-') : date.slice(0, 10);
     const raw_portrait = text(user.portrait, 'user.portrait');
     const portrait = nested ? raw_portrait.split('?')[0] : raw_portrait;
-    const content = render_api_content(raw.content, warn);
+    const content = render_api_content(raw.content, note);
     const reply = content.match(/回复\s+<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>\s*:/);
     return {
         author: text(nested ? user.name || user.name_show : user.name_show || user.name, 'user.name'),
@@ -122,6 +123,7 @@ export async function collect_api(
     const raw_floors: RecordValue[] = [];
     const seen = new Set<number>();
     const warnings: string[] = [];
+    const notes: string[] = [];
     let metadata: Collection['metadata'] | undefined;
     let last_pid: number | undefined;
     let finished = false;
@@ -249,10 +251,10 @@ export async function collect_api(
                 if (!done) { throw new Error(`楼中楼分页未结束，已达到 ${max_pages} 页限制`); }
             }
             if (new Set(replies.map(reply => integer(reply.id, 'sub_post.id', 1))).size !== replies.length) { throw new Error('楼中楼存在重复回复 ID'); }
-            const warn = (message: string) => { warnings.push(`第 ${index} 楼: ${message}`); };
-            floors.push({ index, comment: comment(raw, users, false, warn), ...(replies.length ? {
+            const note = (message: string) => { notes.push(`第 ${index} 楼: ${message}`); };
+            floors.push({ index, comment: comment(raw, users, false, note), ...(replies.length ? {
                 sub_comment_list: replies.map(reply => comment(reply, users, true,
-                    message => warn(`楼中楼回复 ${reply.id}: ${message}`))),
+                    message => note(`楼中楼回复 ${reply.id}: ${message}`))),
             } : {}) });
             completed_replies += replies.length;
         } catch (error) {
@@ -262,5 +264,5 @@ export async function collect_api(
     }
     collection.replies = { current: completed_replies, total: completed_replies, complete: true };
     await report({ stage: '内容采集完成' });
-    return { metadata, floors, warnings };
+    return { metadata, floors, warnings, notes };
 }

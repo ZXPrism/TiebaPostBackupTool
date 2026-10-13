@@ -179,12 +179,13 @@ test('unavailable original emoticon preserves text and reports its source once p
     const post = finalize_post(result.metadata, result.floors);
     assert.equal(post.floor_list[0].comment.content, '哦，长知识了[好运]');
     assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, '哦，长知识了[好运]');
-    assert.equal(result.warnings.length, 2, 'Early validation must not duplicate warnings');
-    assert.match(result.warnings[0], /^第 1 楼:/);
-    assert.match(result.warnings[1], /^第 21 楼: 楼中楼回复 \d+:/);
-    for (const warning of result.warnings) {
-        assert(warning.includes(source.web_image_url));
-        assert.match(warning, /\[好运\].*HTTP 404/);
+    assert.equal(result.warnings.length, 0, 'A verified missing original is not an incomplete backup');
+    assert.equal(result.notes.length, 2, 'Early validation must not duplicate notes');
+    assert.match(result.notes[0], /^第 1 楼:/);
+    assert.match(result.notes[1], /^第 21 楼: 楼中楼回复 \d+:/);
+    for (const note of result.notes) {
+        assert(note.includes(source.web_image_url));
+        assert.match(note, /\[好运\].*HTTP 404/);
     }
     assert(!Object.keys(post.image_map || {}).some(url => url.includes('shoubai_emoji_face_365')));
     assert.equal(replayed.calls.length, 5, 'Missing image does not prevent completing collection');
@@ -429,6 +430,47 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
     }, 'api', new RequestPacer(0), new RequestPacer(5));
     await assert.rejects(runner(queue.list()[0], root, progress, signal), /HTTP 429/);
     assert.equal(attempts, 1, 'Stop further image requests after the first failure');
+});
+
+test('verified unavailable original produces a complete job with a note in the archive', async () => {
+    const { content, source } = JSON.parse(await readFile('tests/regression/api-unavailable-emoticon.json', 'utf8'));
+    const response = structuredClone(fixtures[0].response);
+    Object.assign(response.page as object, { has_more: 0, total_page: 1 });
+    Object.assign(response.first_floor as object, { content, sub_post_number: 0, sub_post_list: { sub_post_list: [] } });
+    response.post_list = [];
+    const context = {
+        route: async () => undefined, routeWebSocket: async () => undefined,
+        cookies: async () => [{ name: 'BDUSS', value: 'synthetic-session', expires: -1 }],
+        close: async () => undefined,
+        request: { post: async () => ({ status: () => 200, text: async () => JSON.stringify(response), dispose: async () => undefined }) },
+    } as unknown as BrowserContext;
+    const root = await mkdtemp(join(tmpdir(), 'tieba-api-missing-original-'));
+    const queue = new JobQueue(root, create_runner(async () => context, async (_context, url) => {
+        assert(!url.includes('shoubai_emoji_face_365'), 'Do not download a known missing original');
+        return new Blob(['synthetic-avatar'], { type: 'image/png' });
+    }, 'api', new RequestPacer(0), new RequestPacer(0)));
+    await queue.initialize();
+    try {
+        const job = await queue.submit(String(baseline.id));
+        const deadline = Date.now() + 5000;
+        while (!['complete', 'partial', 'failed'].includes(job.status) && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.equal(job.status, 'complete', job.error || 'Job did not complete');
+        assert.deepEqual(job.warnings, []);
+        const archive = await readFile(join(root, job.id, 'backup.tar'));
+        let report;
+        for (let offset = 0; archive[offset];) {
+            const name = archive.subarray(offset, offset + 100).toString().split('\0')[0];
+            const size = parseInt(archive.subarray(offset + 124, offset + 135).toString(), 8);
+            if (name === 'report.json') { report = JSON.parse(archive.subarray(offset + 512, offset + 512 + size).toString()); }
+            offset += 512 + Math.ceil(size / 512) * 512;
+        }
+        assert(report);
+        assert.deepEqual(report.warnings, []);
+        assert.equal(report.notes.length, 1);
+        assert(report.notes[0].includes(source.web_image_url));
+    } finally { await queue.close(); }
 });
 
 test('API request signing and non-retryable response validation', async () => {

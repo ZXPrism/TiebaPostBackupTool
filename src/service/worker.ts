@@ -72,12 +72,13 @@ export function create_runner(
             }
             let floors: Floor[] = [];
             let warnings: string[] = [];
+            let notes: string[] = [];
             let metadata: Omit<Post, 'floor_list' | 'image_map'> | undefined;
             let total_pages = 1;
             if (backend === 'api') {
                 const collection = await collect_api(job.post_id,
                     create_api_request(context.request, job.url, pacer, signal), progress, signal, config.max_api_pages);
-                ({ floors, warnings, metadata } = collection);
+                ({ floors, warnings, notes, metadata } = collection);
                 total_pages = metadata.page_cnt;
             } else {
                 page = await context.newPage();
@@ -154,7 +155,7 @@ export function create_runner(
             const files: Record<string, string | Blob> = {
                 'post.json': JSON.stringify(post, null, 2),
                 'viewer.html': images.create_viewer_html(post),
-                'report.json': JSON.stringify({ backend, warnings, floor_count: floors.length, image_count }, null, 2),
+                'report.json': JSON.stringify({ backend, warnings, notes, floor_count: floors.length, image_count }, null, 2),
             };
             for (const [name, blob] of Object.entries(blobs)) { files[`images/${name}`] = blob; }
             const archive = await images.create_tar(files);
