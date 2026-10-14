@@ -74,11 +74,22 @@ test('image normalization is opt-in and never hides missing images or changed UR
 });
 
 test('user URL validation and downloaded resource allowlist', () => {
-    assert.deepEqual(parse_post_url('https://tieba.baidu.com/p/123?pn=2#reply'), { id: 123, url: 'https://tieba.baidu.com/p/123' });
+    for (const url of [
+        'https://tieba.baidu.com/p/123',
+        'https://tieba.baidu.com/p/123?pn=2&pid=456&see_lz=1#456',
+        'https://tieba.baidu.com/p/123#reply',
+        'https://tieba.baidu.com/p/123/?share=复制链接',
+        'https://tieba.baidu.com/p/123/extra/path?pid=456#reply',
+        '  http://tieba.baidu.com/p/123?redirect=https%3A%2F%2Fexample.com%2Fp%2F456  ',
+        `https://tieba.baidu.com/p/123?share=${'x'.repeat(3000)}`,
+    ]) { assert.deepEqual(parse_post_url(url), { id: 123, url: 'https://tieba.baidu.com/p/123' }); }
     assert.equal(parse_post_url('123').id, 123);
-    for (const url of ['http://localhost/p/1', 'file:///etc/passwd', 'https://tieba.baidu.com.evil.test/p/1', 'https://user@tieba.baidu.com/p/1', 'https://tieba.baidu.com:9000/p/1', '0']) {
+    for (const url of ['http://localhost/p/1', 'file:///etc/passwd', 'https://tieba.baidu.com.evil.test/p/1', 'https://user@tieba.baidu.com/p/1', 'https://tieba.baidu.com:9000/p/1', '0',
+        'https://tieba.baidu.com/p/123abc?pn=2', 'https://tieba.baidu.com/p/?id=123',
+        'https://example.com/?url=https://tieba.baidu.com/p/123', 'https://tieba.baidu.com/p/9007199254740992?pn=2']) {
         assert.throws(() => parse_post_url(url));
     }
+    assert.throws(() => parse_post_url('not a URL'), /请输入贴吧帖子链接或帖子 ID/);
     assert(allowed_url('https://tiebapic.baidu.com/a.jpg'));
     for (const url of ['http://127.0.0.1/a', 'http://baidu.com.evil.test/a', 'https://baidu.com:3000/a', 'data:image/svg+xml,test']) {
         assert(!allowed_url(url));

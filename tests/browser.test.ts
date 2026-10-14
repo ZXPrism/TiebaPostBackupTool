@@ -286,7 +286,7 @@ test('HTTP API and frontend submit, poll, download without an access token', asy
         assert.equal((await fetch(`${origin}/api/jobs`, { method: 'POST', headers: { ...headers, Origin: 'https://evil.test' }, body: '{"url":"123"}' })).status, 403);
         assert.equal((await fetch(`${origin}/api/jobs`, { method: 'POST', headers, body: '{"url":"http://127.0.0.1"}' })).status, 400);
         await page.goto(origin);
-        await page.locator('#post-url').fill(base);
+        await page.locator('#post-url').fill(`${base}/?pn=30&pid=456&share=复制链接#456`);
         await page.locator('#submit').click();
         await page.getByRole('progressbar', { name: '全帖楼中楼' }).waitFor();
         assert.equal(await page.getByRole('progressbar').count(), 2);
@@ -296,6 +296,8 @@ test('HTTP API and frontend submit, poll, download without an access token', asy
         assert.equal(await replies.getAttribute('max'), '20000');
         assert.match(await page.locator('.job').innerText(), /410 \/ 约 20000 条/);
         const saved = JSON.parse(await readFile(join(root, queue.list()[0].id, 'job.json'), 'utf8'));
+        assert.equal(saved.post_id, post_id);
+        assert.equal(saved.url, base, 'Link suffixes do not change the post or starting page');
         assert.equal(saved.progress.collection.replies.current, 410);
         await page.setViewportSize({ width: 390, height: 844 });
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));

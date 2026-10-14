@@ -19,12 +19,15 @@ export interface Job {
 }
 
 export function parse_post_url(input: unknown): { id: number; url: string } {
-    if (typeof input !== 'string' || input.length > 2048) {
+    if (typeof input !== 'string') {
         throw new Error('请输入贴吧帖子链接或帖子 ID');
     }
     const value = input.trim();
-    const url = new URL(/^\d+$/.test(value) ? `https://tieba.baidu.com/p/${value}` : value);
-    const match = url.pathname.match(/^\/p\/(\d+)\/?$/);
+    let url: URL;
+    try { url = new URL(/^\d+$/.test(value) ? `https://tieba.baidu.com/p/${value}` : value); }
+    catch { throw new Error('请输入贴吧帖子链接或帖子 ID'); }
+    // Only the complete ID path segment identifies the post; suffixes never affect collection.
+    const match = url.pathname.match(/^\/p\/(\d+)(?:\/|$)/);
     if (!['http:', 'https:'].includes(url.protocol) || url.hostname !== 'tieba.baidu.com'
         || url.port || url.username || url.password || !match) {
         throw new Error('仅支持 https://tieba.baidu.com/p/帖子ID');
