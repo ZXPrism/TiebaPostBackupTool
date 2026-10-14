@@ -13,6 +13,7 @@ import { create_app } from '../src/service/http';
 import { prepare_post_page } from '../src/service/page-readiness';
 import { collect_api } from '../src/shared/api-collector';
 import { finalize_post } from '../src/shared/post';
+import type { Progress } from '../src/shared/progress';
 
 let browser: Browser;
 before(async () => { browser = await chromium.launch({ headless: true, executablePath: process.env.TEST_CHROMIUM_EXECUTABLE_PATH }); });
@@ -279,14 +280,16 @@ test('post lookup is read-only, explicit backup resumes across reloads and diagn
         await writeFile(join(directory, 'backup.tar'), 'history archive');
     }
     let finish_collection = () => {};
+    let report_progress: (progress: Progress) => Promise<void> = async () => { throw new Error('Worker has not started'); };
     const collecting = new Promise<void>(resolve => { finish_collection = resolve; });
     let runs = 0;
     const latest_post = JSON.stringify(make_post('2026-01-01T00:00:00.000Z'));
     const queue = new JobQueue(root, async (_job, directory, progress) => {
         runs++;
         if (runs > 1) { throw new Error('INTERNAL_FAILURE: /private/path API attempt 3'); }
-        await progress({ stage: 'INTERNAL_STAGE: 采集第 117 楼的楼中楼', current: 0, total: 5,
-            collection: { pages: { current: 381, total: 381, complete: true }, replies: { current: 410, total: 20000, complete: false } } });
+        report_progress = progress;
+        await progress({ stage: 'INTERNAL_STAGE: 楼层分页', current: 10, total: 381,
+            collection: { pages: { current: 10, total: 381, complete: false } } });
         await collecting;
         await writeFile(join(directory, 'post.json'), latest_post);
         await writeFile(join(directory, 'backup.tar'), 'archive');
@@ -333,13 +336,18 @@ test('post lookup is read-only, explicit backup resumes across reloads and diagn
         await polled;
         assert.equal(await page.locator('.snapshot').first().getAttribute('open'), '');
         await page.getByRole('button', { name: '开始备份', exact: true }).click();
-        await page.getByRole('progressbar', { name: '全帖楼中楼' }).waitFor();
-        const deadline = Date.now() + 5000;
-        while (await page.getByRole('progressbar', { name: '全帖楼中楼' }).getAttribute('value') !== '410' && Date.now() < deadline) {
-            await new Promise(resolve => setTimeout(resolve, 20));
-        }
+        await page.waitForFunction(() => document.querySelectorAll('progress')[1]?.value === 10);
         assert.equal(await page.getByRole('progressbar').count(), 2);
-        assert.equal(await page.getByRole('progressbar', { name: '楼层分页' }).getAttribute('value'), '381');
+        assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '0');
+        assert.equal(await page.getByRole('progressbar', { name: '楼层分页' }).getAttribute('value'), '10');
+        assert.equal(await page.getByRole('progressbar', { name: '楼层分页' }).getAttribute('max'), '381');
+        const stage_bar = await page.getByRole('progressbar', { name: '楼层分页' }).elementHandle();
+        assert(stage_bar);
+        await report_progress({ stage: 'INTERNAL_STAGE: 采集第 117 楼的楼中楼', current: 0, total: 5,
+            collection: { pages: { current: 381, total: 381, complete: true }, replies: { current: 410, total: 20000, complete: false } } });
+        await page.getByRole('progressbar', { name: '全帖楼中楼' }).waitFor();
+        assert(await stage_bar.evaluate(el => el.isConnected), 'Phase changes reuse the animated progress bar');
+        assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '25');
         assert.equal(await page.getByRole('progressbar', { name: '全帖楼中楼' }).getAttribute('value'), '410');
         assert.equal(await page.getByRole('progressbar', { name: '全帖楼中楼' }).getAttribute('max'), '20000');
         assert.equal(await page.locator('#start-backup').isVisible(), false);
@@ -369,10 +377,38 @@ test('post lookup is read-only, explicit backup resumes across reloads and diagn
         assert.equal(await page.locator('#start-backup').isVisible(), false);
         assert.equal(await page.locator('#backups .job').count(), 2);
         assert.equal(runs, 1);
+        const complete_collection = { pages: { current: 395, total: 395, complete: true },
+            replies: { current: 16757, total: 16757, complete: true } };
+        await report_progress({ stage: '下载图片', current: 0, total: 2400, collection: complete_collection });
+        await page.getByRole('progressbar', { name: '保存图片' }).waitFor();
+        assert.equal(await page.getByRole('progressbar').count(), 2);
+        assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '50');
+        assert.equal(await page.getByRole('progressbar', { name: '保存图片' }).getAttribute('value'), '0');
+        await report_progress({ stage: '下载图片', current: 1200, total: 2400 });
+        await page.waitForFunction(() => document.querySelectorAll('progress')[1]?.value === 1200);
+        assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '62');
+        await page.reload();
+        await query();
+        assert.equal(await page.getByRole('progressbar', { name: '保存图片' }).getAttribute('value'), '1200');
+        assert.equal(await page.getByRole('progressbar', { name: '保存图片' }).getAttribute('max'), '2400');
+        assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '62');
+        assert.equal(await page.locator('#start-backup').isVisible(), false);
+        assert.match(await page.locator('#active-backup').innerText(), /1200 \/ 2400 张/);
         await page.setViewportSize({ width: 390, height: 844 });
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
         await page.screenshot({ path: join(root, 'collection-progress.png'), fullPage: true });
         console.log(`Progress screenshot: ${join(root, 'collection-progress.png')}`);
+        // Empty image sets must finish the phase without division by zero or filling the overall bar.
+        await report_progress({ stage: '下载图片', current: 0, total: 0 });
+        await page.waitForFunction(() => document.querySelector('progress')?.value === 75);
+        assert.match(await page.locator('#active-backup').innerText(), /0 \/ 0 张 · 已完成/);
+        for (const stage of ['整理图片', '打包文件', '准备下载文件']) {
+            await report_progress({ stage });
+            await query();
+            assert.equal(await page.getByRole('progressbar').count(), 2);
+            assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '75');
+            assert.equal(await page.getByRole('progressbar', { name: '整理备份' }).getAttribute('value'), null);
+        }
         finish_collection();
         await page.getByRole('heading', { name: '最新结果' }).waitFor();
         assert.equal(await page.locator('#backups .job').count(), 3);

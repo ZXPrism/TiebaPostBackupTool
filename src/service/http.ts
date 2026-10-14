@@ -11,13 +11,21 @@ import type { ActiveBackup, PostBackups, Snapshot } from '../shared/service-cont
 import type { Post } from '../types';
 
 function active_backup(job: Job): ActiveBackup {
-    const phase = job.progress.stage === '下载图片' ? 'images'
-        : ['整理图片', '打包文件', '准备下载文件'].includes(job.progress.stage) ? 'packaging' : 'collection';
-    const count = (value: NonNullable<Job['progress']['collection']>['pages']) =>
-        ({ current: value.current, total: value.total, complete: value.complete });
+    if (job.status === 'queued') { return { status: 'queued', phase: 'floors', overall: 0 }; }
     const collection = job.progress.collection;
-    return { status: job.status === 'queued' ? 'queued' : 'running', phase,
-        collection: collection ? { pages: count(collection.pages), replies: collection.replies ? count(collection.replies) : undefined } : undefined };
+    const phase = job.progress.stage === '下载图片' ? 'images'
+        : ['整理图片', '打包文件', '准备下载文件'].includes(job.progress.stage) ? 'packaging'
+        : collection?.pages.complete ? 'replies' : 'floors';
+    const value = phase === 'floors' ? collection?.pages : phase === 'replies' ? collection?.replies
+        : phase === 'images' ? { current: job.progress.current ?? 0, total: job.progress.total,
+            complete: job.progress.total !== undefined && (job.progress.current ?? 0) >= job.progress.total } : undefined;
+    const progress = value ? { current: value.current, total: value.total, complete: value.complete } : undefined;
+    const fraction = !progress ? 0 : progress.complete ? 1
+        : progress.total ? Math.min(1, Math.max(0, progress.current / progress.total)) : 0;
+    // Reserve the last quarter for preparing the archive and download representations.
+    // Those operations have no measurable fraction; never report an active job as finished.
+    const overall = Math.floor(({ floors: 0, replies: 25, images: 50, packaging: 75 }[phase]) + fraction * 25);
+    return { status: 'running', phase, overall, progress };
 }
 
 function post_backups(queue: JobQueue, post: { id: number; url: string }): PostBackups {

@@ -1,4 +1,4 @@
-import type { CollectionProgress } from './progress';
+import type { ProgressCount } from './progress';
 
 export interface BackupSummary {
     id: string;
@@ -12,8 +12,10 @@ export interface BackupSummary {
 
 export interface ActiveBackup {
     status: 'queued' | 'running';
-    phase: 'collection' | 'images' | 'packaging';
-    collection?: CollectionProgress;
+    phase: 'floors' | 'replies' | 'images' | 'packaging';
+    /** Percentage estimated from four equally weighted phases, not elapsed time. */
+    overall: number;
+    progress?: ProgressCount;
 }
 
 export interface PostBackups {

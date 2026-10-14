@@ -100,7 +100,7 @@ async function download(backup: BackupSummary): Promise<void> {
 
 let progress_view: {
     heading: HTMLHeadingElement;
-    bars: { detail: HTMLSpanElement; bar: HTMLProgressElement; fill: HTMLSpanElement }[];
+    bars: { label: HTMLSpanElement; detail: HTMLSpanElement; bar: HTMLProgressElement; fill: HTMLSpanElement }[];
 } | undefined;
 
 function render_active(active?: ActiveBackup): void {
@@ -115,40 +115,48 @@ function render_active(active?: ActiveBackup): void {
     if (!progress_view) {
         const heading = node('h3');
         container.append(heading, node('p', '关闭页面不会中断备份，稍后输入同一链接即可继续查看进度。', 'hint'));
-        const bars = ['楼层分页', '全帖楼中楼'].map(label => {
+        const bars = ['总进度', '当前阶段'].map(text => {
             const group = node('div', '', 'collection-progress');
             const caption = node('div', '', 'progress-caption');
             const detail = node('span');
-            caption.append(node('span', label), detail);
+            const label = node('span', text);
+            caption.append(label, detail);
             const track = node('div', '', 'progress-track');
             const bar = node('progress');
-            bar.setAttribute('aria-label', label);
+            bar.setAttribute('aria-label', text);
             const fill = node('span', '', 'progress-fill');
             fill.setAttribute('aria-hidden', 'true');
             track.append(bar, fill);
             group.append(caption, track);
             container.append(group);
-            return { detail, bar, fill };
+            return { label, detail, bar, fill };
         });
         progress_view = { heading, bars };
     }
     progress_view.heading.textContent = active.status === 'queued' ? '已进入队列，等待备份'
-        : { collection: '正在采集帖子', images: '正在保存图片', packaging: '正在整理备份' }[active.phase];
+        : { floors: '正在采集帖子', replies: '正在采集楼中楼', images: '正在保存图片', packaging: '正在整理备份' }[active.phase];
     const bars = progress_view.bars;
-    const update = (index: number, unit: string, count?: ProgressCount) => {
-        const { detail, bar, fill } = bars[index];
-        detail.textContent = !count ? '等待采集' : count.total === undefined ? `已采集 ${count.current} ${unit}，总量待确认`
-            : `${count.current} / ${count.complete ? '' : '约 '}${count.total} ${unit}${count.complete ? ' · 已完成' : ''}`;
-        if (!count) { bar.max = 1; bar.value = 0; }
-        else if (count.total !== undefined) {
+    const update = (index: number, count?: ProgressCount) => {
+        const { bar, fill } = bars[index];
+        if (count?.total !== undefined) {
             bar.max = Math.max(count.total, 1);
             bar.value = count.complete ? bar.max : count.current;
         } else { bar.removeAttribute('value'); }
+        fill.classList.toggle('indeterminate', bar.position < 0);
         // Numeric and accessible progress remain exact; only the visual fill is animated.
         fill.style.transform = `scaleX(${Math.max(0, bar.position)})`;
     };
-    update(0, '页', active.collection?.pages);
-    update(1, '条', active.collection?.replies);
+    bars[0].detail.textContent = `${active.overall}% · 按阶段估算`;
+    update(0, { current: active.overall, total: 100, complete: false });
+    const [label, unit] = { floors: ['楼层分页', '页'], replies: ['全帖楼中楼', '条'],
+        images: ['保存图片', '张'], packaging: ['整理备份', ''] }[active.phase];
+    bars[1].label.textContent = label;
+    bars[1].bar.setAttribute('aria-label', label);
+    const count = active.progress;
+    bars[1].detail.textContent = active.status === 'queued' ? '等待采集'
+        : !count ? '处理中…' : count.total === undefined ? `已处理 ${count.current} ${unit}，总量待确认`
+        : `${count.current} / ${count.complete || active.phase === 'images' ? '' : '约 '}${count.total} ${unit}${count.complete ? ' · 已完成' : ''}`;
+    update(1, active.status === 'queued' ? { current: 0, total: 1, complete: false } : count);
 }
 
 /** Parse in an inert template and insert only text; no image or other resource enters the document. */
