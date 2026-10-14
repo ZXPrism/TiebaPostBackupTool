@@ -9,13 +9,12 @@
 </head>
 <body>
     <main>
-        <header><span class="eyebrow">Tieba Post Backup Tool</span><h1>百度贴吧贴子备份工具</h1><p>输入帖子链接，查找已有备份，也可以保存一份新的备份。</p></header>
+        <header><span class="eyebrow">Tieba Post Backup Tool</span><h1>百度贴吧贴子备份工具</h1></header>
         <section class="panel" aria-labelledby="form-title">
             <h2 id="form-title">查找帖子备份</h2>
             <form id="backup-form">
                 <label for="post-url">帖子链接或 ID</label>
                 <div class="input-row"><input id="post-url" name="url" placeholder="https://tieba.baidu.com/p/…" required autocomplete="off"><button id="submit" type="submit">查询备份 <span aria-hidden="true">→</span></button></div>
-                <p class="hint">查询不会自动开始备份。关闭页面后，重新输入原链接即可查询结果。</p>
             </form>
             <p id="message" role="status" aria-live="polite"></p>
         </section>
