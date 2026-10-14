@@ -1,4 +1,5 @@
 import type { Progress } from '../shared/progress';
+import type { ActiveBackup } from '../shared/service-contract';
 export type { Progress } from '../shared/progress';
 
 export type JobStatus = 'queued' | 'running' | 'complete' | 'partial' | 'failed';
@@ -11,6 +12,7 @@ export interface Job {
     created_at: string;
     updated_at: string;
     progress: Progress;
+    phase_timing?: { phase: ActiveBackup['phase']; started_at: number; initial_current: number };
     warnings: string[];
     error?: string;
     filename?: string;

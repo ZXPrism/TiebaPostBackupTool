@@ -384,9 +384,15 @@ test('post lookup is read-only, explicit backup resumes across reloads and diagn
         assert.equal(await page.getByRole('progressbar').count(), 2);
         assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '50');
         assert.equal(await page.getByRole('progressbar', { name: '保存图片' }).getAttribute('value'), '0');
+        assert.match(await page.locator('#active-backup').innerText(), /本阶段预计剩余：估算中/);
+        assert(job.phase_timing);
+        job.phase_timing.started_at = Date.now() - 60000;
         await report_progress({ stage: '下载图片', current: 1200, total: 2400 });
         await page.waitForFunction(() => document.querySelectorAll('progress')[1]?.value === 1200);
         assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '62');
+        assert.match(await page.locator('#active-backup').innerText(), /本阶段预计剩余：约 \d+ 分钟/);
+        const saved_progress = JSON.parse(await readFile(join(root, job.id, 'job.json'), 'utf8'));
+        assert.deepEqual(saved_progress.phase_timing, job.phase_timing);
         await page.reload();
         await query();
         assert.equal(await page.getByRole('progressbar', { name: '保存图片' }).getAttribute('value'), '1200');
@@ -394,6 +400,7 @@ test('post lookup is read-only, explicit backup resumes across reloads and diagn
         assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '62');
         assert.equal(await page.locator('#start-backup').isVisible(), false);
         assert.match(await page.locator('#active-backup').innerText(), /1200 \/ 2400 张/);
+        assert.match(await page.locator('#active-backup').innerText(), /本阶段预计剩余：约 \d+ 分钟/);
         await page.setViewportSize({ width: 390, height: 844 });
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
         await page.screenshot({ path: join(root, 'collection-progress.png'), fullPage: true });
@@ -408,6 +415,7 @@ test('post lookup is read-only, explicit backup resumes across reloads and diagn
             assert.equal(await page.getByRole('progressbar').count(), 2);
             assert.equal(await page.getByRole('progressbar', { name: '总进度' }).getAttribute('value'), '75');
             assert.equal(await page.getByRole('progressbar', { name: '整理备份' }).getAttribute('value'), null);
+            assert.match(await page.locator('#active-backup').innerText(), /本阶段预计剩余：暂无法估算/);
         }
         finish_collection();
         await page.getByRole('heading', { name: '最新结果' }).waitFor();

@@ -16,6 +16,8 @@ export interface ActiveBackup {
     /** Percentage estimated from four equally weighted phases, not elapsed time. */
     overall: number;
     progress?: ProgressCount;
+    /** Estimated seconds remaining in this phase only; absent until measurable. */
+    remaining_seconds?: number;
 }
 
 export interface PostBackups {

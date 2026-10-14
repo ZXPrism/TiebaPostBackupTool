@@ -100,6 +100,7 @@ async function download(backup: BackupSummary): Promise<void> {
 
 let progress_view: {
     heading: HTMLHeadingElement;
+    estimate: HTMLParagraphElement;
     bars: { label: HTMLSpanElement; detail: HTMLSpanElement; bar: HTMLProgressElement; fill: HTMLSpanElement }[];
 } | undefined;
 
@@ -131,7 +132,9 @@ function render_active(active?: ActiveBackup): void {
             container.append(group);
             return { label, detail, bar, fill };
         });
-        progress_view = { heading, bars };
+        const estimate = node('p', '', 'hint');
+        container.append(estimate);
+        progress_view = { heading, bars, estimate };
     }
     progress_view.heading.textContent = active.status === 'queued' ? '已进入队列，等待备份'
         : { floors: '正在采集帖子', replies: '正在采集楼中楼', images: '正在保存图片', packaging: '正在整理备份' }[active.phase];
@@ -157,6 +160,13 @@ function render_active(active?: ActiveBackup): void {
         : !count ? '处理中…' : count.total === undefined ? `已处理 ${count.current} ${unit}，总量待确认`
         : `${count.current} / ${count.complete || active.phase === 'images' ? '' : '约 '}${count.total} ${unit}${count.complete ? ' · 已完成' : ''}`;
     update(1, active.status === 'queued' ? { current: 0, total: 1, complete: false } : count);
+    const seconds = active.remaining_seconds;
+    const minutes = Math.ceil((seconds ?? 0) / 60);
+    progress_view.estimate.hidden = active.status === 'queued' || count?.complete === true;
+    progress_view.estimate.textContent = `本阶段预计剩余：${seconds === undefined
+        ? active.phase === 'packaging' ? '暂无法估算' : '估算中…'
+        : seconds < 60 ? '不足 1 分钟' : minutes < 60 ? `约 ${minutes} 分钟`
+        : `约 ${Math.floor(minutes / 60)} 小时${minutes % 60 ? ` ${minutes % 60} 分钟` : ''}`}`;
 }
 
 /** Parse in an inert template and insert only text; no image or other resource enters the document. */

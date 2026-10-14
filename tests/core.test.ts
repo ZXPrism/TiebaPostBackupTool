@@ -8,12 +8,70 @@ import type { Post } from '../src/types';
 import { compare_posts, regression_report } from '../src/shared/regression';
 import { finalize_post } from '../src/shared/post';
 import { ImageHandler } from '../src/image_handler';
-import { parse_post_url } from '../src/service/model';
+import { parse_post_url, type Job } from '../src/service/model';
+import { active_backup, record_progress } from '../src/service/progress';
 import { allowed_url } from '../src/service/browser';
 import { JobQueue } from '../src/service/queue';
 
 const bytes = await readFile('tests/regression/post.json');
 const baseline = JSON.parse(bytes.toString()) as Post;
+
+test('phase time estimates survive serialization and include stalls, retries and changing totals', () => {
+    const job: Job = { id: 'timing', post_id: 123, url: 'https://tieba.baidu.com/p/123', status: 'running',
+        created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString(), progress: { stage: '排队中' }, warnings: [] };
+    const pages = (current: number, total = 100) => ({ stage: '采集帖子',
+        collection: { pages: { current, total, complete: false } } });
+    // Time spent queued or starting a browser is not counted as processing time.
+    record_progress(job, pages(0), 60000);
+    record_progress(job, pages(5), 65000);
+    assert.equal(active_backup(job, 65000).remaining_seconds, undefined);
+    record_progress(job, pages(10), 70000);
+    assert.equal(active_backup(job, 70000).remaining_seconds, 90);
+    assert.equal(active_backup(JSON.parse(JSON.stringify(job)), 70000).remaining_seconds, 90);
+    assert.equal(active_backup(job, 80000).remaining_seconds, 180, 'Stalling increases the estimate instead of counting down');
+    record_progress(job, pages(30), 90000);
+    assert.equal(active_backup(job, 90000).remaining_seconds, 70);
+    record_progress(job, pages(30, 200), 90000);
+    assert.equal(active_backup(job, 90000).remaining_seconds, 170);
+    record_progress(job, { stage: '采集楼中楼', collection: {
+        pages: { current: 200, total: 200, complete: true }, replies: { current: 0, total: 1000, complete: false },
+    } }, 90000);
+    assert.equal(active_backup(job, 90000).remaining_seconds, undefined, 'Replies do not reuse the page processing rate');
+    record_progress(job, { stage: '采集楼中楼', collection: {
+        pages: { current: 200, total: 200, complete: true }, replies: { current: 500, total: 1000, complete: false },
+    } }, 110000);
+    assert.equal(active_backup(job, 110000).remaining_seconds, 20);
+    record_progress(job, { stage: '下载图片', current: 0, total: 20 }, 120000);
+    assert.equal(active_backup(job, 120000).remaining_seconds, undefined);
+    record_progress(job, { stage: '下载图片', current: 10, total: 20 }, 150000);
+    assert.equal(active_backup(job, 150000).remaining_seconds, 30);
+    record_progress(job, { stage: '下载图片', current: 20, total: 20 }, 180000);
+    assert.equal(active_backup(job, 180000).remaining_seconds, 0);
+    assert.equal(active_backup(job, 180000).overall, 75, 'An image estimate is not a whole-job estimate');
+    record_progress(job, { stage: '准备下载文件' }, 180000);
+    assert.equal(active_backup(job, 190000).remaining_seconds, undefined);
+});
+
+test('phase estimates handle missing samples, unknown totals, empty work and counter or clock resets', () => {
+    const job: Job = { id: 'timing', post_id: 123, url: 'https://tieba.baidu.com/p/123', status: 'queued',
+        created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString(), progress: { stage: '排队中' }, warnings: [] };
+    assert.equal(active_backup(job, 60000).remaining_seconds, undefined);
+    job.status = 'running';
+    job.progress = { stage: '下载图片', current: 10, total: 20 };
+    assert.equal(active_backup(job, 60000).remaining_seconds, undefined, 'Old jobs have no timing samples');
+    record_progress(job, { stage: '下载图片', current: 0, total: 20 }, 0);
+    assert.equal(active_backup(job, 60000).remaining_seconds, undefined, 'Zero throughput is not a finite estimate');
+    record_progress(job, { stage: '下载图片', current: 5 }, 10000);
+    assert.equal(active_backup(job, 10000).remaining_seconds, undefined, 'Unknown total');
+    record_progress(job, { stage: '下载图片', current: 10, total: 20 }, 20000);
+    assert.equal(active_backup(job, 20000).remaining_seconds, 20);
+    record_progress(job, { stage: '下载图片', current: 5, total: 20 }, 30000);
+    assert.equal(active_backup(job, 30000).remaining_seconds, undefined, 'Counter reset discards the old rate');
+    record_progress(job, { stage: '下载图片', current: 6, total: 20 }, 10000);
+    assert.equal(active_backup(job, 10000).remaining_seconds, undefined, 'Clock reset discards the old rate');
+    record_progress(job, { stage: '下载图片', current: 0, total: 0 }, 40000);
+    assert.equal(active_backup(job, 40000).remaining_seconds, 0);
+});
 
 test('saved backup date drives the viewer and is explicitly accounted for in regression', () => {
     const post = { ...baseline, backup_date: '2026-10-13T16:44:55.728Z' };

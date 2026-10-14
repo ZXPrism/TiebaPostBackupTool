@@ -6,6 +6,7 @@ import { parse_post_url, type Job, type Progress } from './model';
 import type { Runner } from './worker';
 import type { Post } from '../types';
 import { ServiceLogger, type LogLevel } from './logging';
+import { record_progress } from './progress';
 
 /** A single worker with durable job records. Interrupted jobs are never reported as complete. */
 export class JobQueue {
@@ -121,7 +122,7 @@ export class JobQueue {
             const timer = setTimeout(() => controller.abort(new Error(`任务运行超过 ${config.job_timeout_ms / 60000} 分钟，已中止`)), config.job_timeout_ms);
             try {
                 const result = await this.runner(job, this.directory(job.id), async (progress: Progress) => {
-                    job.progress = { ...progress, collection: progress.collection ?? job.progress.collection };
+                    record_progress(job, progress);
                     job.updated_at = new Date().toISOString();
                     await this.save(job);
                     await this.log('debug', 'progress', progress, job.id);
