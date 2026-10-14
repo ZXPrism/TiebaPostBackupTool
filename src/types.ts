@@ -29,7 +29,7 @@ export interface Comment {
 }
 
 export interface ImageMap {
-    [original_url: string]: string, // Maps original URL to new name
+    [original_url: string]: string, // Identical downloaded images may share the same local filename.
 }
 
 // Parsing state for multi-page support

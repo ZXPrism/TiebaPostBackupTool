@@ -125,6 +125,50 @@ export class ImageHandler {
         return blobs;
     }
 
+    /** Merge byte-identical downloads in source order, then update every local image reference. */
+    public async deduplicate_images(post: Post, blobs: Record<string, Blob>, signal?: AbortSignal): Promise<Record<string, Blob>> {
+        const aliases = new Map<string, string>();
+        const hashes = new Map<string, string>();
+        const unique: Record<string, Blob> = {};
+        const failed = new Set(this.failed_images);
+        for (const name of new Set(Object.values(post.image_map || {}))) {
+            signal?.throwIfAborted();
+            const blob = blobs[name];
+            if (!blob) { throw new Error(`缺少已下载的图片: ${name}`); }
+            // Failed downloads retain their own placeholder and diagnostic identity.
+            if (!failed.has(name)) {
+                const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+                const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+                const existing = hashes.get(hash);
+                if (existing) { aliases.set(name, existing); continue; }
+                hashes.set(hash, name);
+            }
+            aliases.set(name, name);
+            unique[name] = blob;
+        }
+        signal?.throwIfAborted();
+        // Commit the new references only after hashing succeeds, so cancellation leaves post intact.
+        const image_map = post.image_map || {};
+        for (const [url, name] of Object.entries(image_map)) {
+            image_map[url] = aliases.get(name) || name;
+        }
+        for (const floor of post.floor_list) {
+            for (const comment of [floor.comment, ...(floor.sub_comment_list || [])]) {
+                if (comment.avatar_url && aliases.has(comment.avatar_url)) {
+                    comment.avatar_url = aliases.get(comment.avatar_url);
+                }
+                comment.content = comment.content.replace(/<img\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi, tag =>
+                    tag.replace(/(\s+)([\w:-]+)(\s*=\s*)(["'])(.*?)\4/g, (attribute, space, name, equals, quote, value: string) => {
+                        if (name.toLowerCase() !== 'src' || !value.startsWith('./images/')) { return attribute; }
+                        const target = aliases.get(value.slice('./images/'.length));
+                        return target ? `${space}${name}${equals}${quote}./images/${target}${quote}` : attribute;
+                    }));
+            }
+        }
+        this.image_map = { ...post.image_map };
+        return unique;
+    }
+
     /**
      * Fetch single image as blob using GM_xmlhttpRequest to bypass CORS.
      */

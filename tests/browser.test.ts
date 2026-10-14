@@ -151,8 +151,10 @@ test('userscript and headless worker produce identical JSON across pages and del
         assert.deepEqual(plugin_post.floor_list.map(floor => floor.index), [1, 2]);
         assert.deepEqual(plugin_post.floor_list[0].sub_comment_list?.map(comment => comment.author), ['甲', '乙']);
         assert.equal(plugin_post.floor_list[0].comment.content, '第1页<img src="./images/image_1.png">');
-        assert.equal(plugin_post.floor_list[0].comment.avatar_url, 'image_2.jpg');
-        assert.deepEqual(plugin_post.image_map, { [photo]: 'image_1.png', [avatar]: 'image_2.jpg' });
+        assert.equal(plugin_post.floor_list[0].comment.avatar_url, 'image_1.png');
+        assert.deepEqual(plugin_post.image_map, { [photo]: 'image_1.png', [avatar]: 'image_1.png' });
+        assert(!plugin_files.has('images/image_2.jpg'));
+        assert.equal(JSON.parse(plugin_files.get('report.json') || '').image_count, 1);
         for (const [key, value] of Object.entries(metadata)) { assert.deepEqual(plugin_post[key as keyof Post], value); }
 
         const root = await mkdtemp(join(tmpdir(), 'tieba-browser-'));
@@ -165,13 +167,16 @@ test('userscript and headless worker produce identical JSON across pages and del
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
             assert.equal(job.status, 'complete', job.error || 'Job did not complete');
+            assert.equal(job.image_count, 1);
             const cloud_post = JSON.parse(await readFile(join(root, job.id, 'post.json'), 'utf8'));
             assert.deepEqual(compare_posts(plugin_post, cloud_post), []);
             const cloud_files = unpack(await readFile(join(root, job.id, 'backup.tar')));
             assert.equal(cloud_files.get('post.json'), plugin_files.get('post.json'));
-            for (const name of ['viewer.html', 'images/image_1.png', 'images/image_2.jpg']) {
-                assert.equal(cloud_files.get(name), plugin_files.get(name));
-            }
+            assert(!cloud_files.has('images/image_2.jpg'));
+            assert.equal(cloud_files.get('images/image_1.png'), plugin_files.get('images/image_1.png'));
+            // Each export has its own backup date; all other HTML must remain identical.
+            const without_date = (html: string) => html.replace(/<time class="backup-date" datetime="[^"]+">[^<]+<\/time>/, '<time>backup date</time>');
+            assert.equal(without_date(cloud_files.get('viewer.html') || ''), without_date(plugin_files.get('viewer.html') || ''));
         } finally { await queue.close(); }
     } finally { await context.close(); }
 });

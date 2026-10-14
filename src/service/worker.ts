@@ -137,12 +137,12 @@ export function create_runner(
             const post = finalize_post({ ...metadata, page_cnt: total_pages }, floors, images);
             await mkdir(directory, { recursive: true });
             await writeFile(join(directory, 'post.json'), JSON.stringify(post, null, 2));
-            const image_count = Object.keys(post.image_map || {}).length;
-            await progress({ stage: '下载图片', current: 0, total: image_count });
+            const download_count = Object.keys(post.image_map || {}).length;
+            await progress({ stage: '下载图片', current: 0, total: download_count });
             // Serialize asynchronous progress writes even though images are fetched in batches.
             let updates = Promise.resolve();
             let update_error: unknown;
-            const blobs = await images.download_images((current, total) => {
+            const downloaded_images = await images.download_images((current, total) => {
                 updates = updates.then(() => progress({ stage: '下载图片', current, total }))
                     .catch(error => { update_error = error; });
             }, signal);
@@ -150,6 +150,11 @@ export function create_runner(
             if (update_error) { throw update_error; }
             if (image_error) { throw image_error; }
             signal.throwIfAborted();
+            await progress({ stage: '整理图片' });
+            const blobs = await images.deduplicate_images(post, downloaded_images, signal);
+            const image_count = Object.keys(blobs).length;
+            await writeFile(join(directory, 'post.json.tmp'), JSON.stringify(post, null, 2));
+            await rename(join(directory, 'post.json.tmp'), join(directory, 'post.json'));
             warnings.push(...images.failed_images.map(name => `图片下载失败（已用占位图替代）: ${name}`));
             await progress({ stage: '打包文件' });
             const files: Record<string, string | Blob> = {

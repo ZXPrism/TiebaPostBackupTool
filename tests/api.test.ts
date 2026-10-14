@@ -405,11 +405,21 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
         assert.equal(job.status, 'complete', job.error || 'Job did not complete');
         assert.equal(job.floor_count, 28);
         assert.equal(image_count, 24);
+        assert.equal(job.image_count, 1, 'Identical downloads are stored only once');
         assert(peak_images > 1 && peak_images <= 5, `Image concurrency: ${peak_images}`);
         assert.equal(calls.length, 5);
         assert.equal(closed, 1);
         const post = JSON.parse(await readFile(join(root, job.id, 'post.json'), 'utf8')) as Post;
-        assert.equal(regression_report(baseline, post).differences.length, 75);
+        assert.equal(Object.keys(post.image_map || {}).length, 24, 'All original URLs remain recorded');
+        assert.equal(new Set(Object.values(post.image_map || {})).size, 1);
+        for (const floor of post.floor_list) {
+            for (const comment of [floor.comment, ...(floor.sub_comment_list || [])]) {
+                assert.equal(comment.avatar_url, 'image_1.jpg');
+                for (const match of comment.content.matchAll(/src="\.\/images\/([^"]+)"/g)) {
+                    assert.equal(match[1], 'image_1.jpg');
+                }
+            }
+        }
         const archive = await readFile(join(root, job.id, 'backup.tar'));
         const files = new Map<string, string>();
         for (let offset = 0; archive[offset];) {
@@ -421,7 +431,9 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
         assert.deepEqual(JSON.parse(files.get('post.json') || ''), post);
         assert.match(files.get('viewer.html') || '', /能玩了/);
         assert.equal(JSON.parse(files.get('report.json') || '').backend, 'api');
-        assert.equal(files.size, 27);
+        assert.equal(JSON.parse(files.get('report.json') || '').image_count, 1);
+        assert.equal(files.get('images/image_1.jpg'), 'synthetic-image');
+        assert.equal(files.size, 4);
     } finally { await queue.close(); }
 
     let attempts = 0;

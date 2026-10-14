@@ -46,11 +46,15 @@ export function regression_report(expected: Post, actual: Post, options: Regress
 function canonicalize(post: Post, normalize_images: boolean): unknown {
     const copy = JSON.parse(JSON.stringify(post)) as Post;
     if (!normalize_images) { return copy; }
-    const reverse = new Map<string, string>();
+    const sources = new Map<string, string[]>();
     for (const [url, filename] of Object.entries(copy.image_map || {})) {
-        if (reverse.has(filename)) { throw new Error(`图片映射文件名重复: ${filename}`); }
-        reverse.set(filename, url);
+        const urls = sources.get(filename) || [];
+        urls.push(url);
+        sources.set(filename, urls);
     }
+    // Preserve alias groups: filename normalization must not silently approve merging different images.
+    const reverse = new Map([...sources].map(([filename, urls]) => [filename,
+        urls.length === 1 ? urls[0] : `image-sources:${encodeURIComponent(JSON.stringify(urls.sort()))}`]));
     for (const floor of copy.floor_list) {
         for (const comment of [floor.comment, ...(floor.sub_comment_list || [])]) {
             comment.content = comment.content.replace(/src=["']\.\/images\/([^"']+)["']/g, (_match, name: string) => {

@@ -68,6 +68,69 @@ test('user URL validation and downloaded resource allowlist', () => {
     }
 });
 
+test('image content deduplication preserves references, source URLs and deterministic first filenames', async () => {
+    const images = new ImageHandler();
+    const post: Post = { ...baseline, image_map: {
+        'https://tiebapic.baidu.com/first.png': 'image_1.png',
+        'https://tiebapic.baidu.com/alias.jpg': 'image_2.jpg',
+        'https://tiebapic.baidu.com/different.png': 'image_3.png',
+    }, floor_list: [{ index: 1, comment: {
+        author: '甲', date: '2026-10-14', avatar_url: 'image_2.jpg',
+        content: `image_2.jpg src="./images/image_2.jpg" <img alt="src='./images/image_2.jpg'" SRC = './images/image_2.jpg'>`,
+    }, sub_comment_list: [{ author: '乙', date: '2026-10-14', avatar_url: 'image_3.png', content: '<img src="./images/image_2.jpg"><img src="./images/image_3.png">' }] }] };
+    assert(post.image_map);
+    const original_urls = Object.keys(post.image_map);
+    const blobs = {
+        'image_3.png': new Blob(['different'], { type: 'image/png' }),
+        'image_2.jpg': new Blob(['identical'], { type: 'image/jpeg' }),
+        'image_1.png': new Blob(['identical'], { type: 'image/png' }),
+    };
+    const unique = await images.deduplicate_images(post, blobs);
+    assert.deepEqual(Object.keys(unique), ['image_1.png', 'image_3.png']);
+    assert.equal(unique['image_1.png'], blobs['image_1.png']);
+    assert.deepEqual(Object.keys(post.image_map), original_urls);
+    assert.equal(post.image_map[original_urls[1]], 'image_1.png');
+    assert.equal(post.floor_list[0].comment.avatar_url, 'image_1.png');
+    assert.equal(post.floor_list[0].comment.content, `image_2.jpg src="./images/image_2.jpg" <img alt="src='./images/image_2.jpg'" SRC = './images/image_1.png'>`);
+    assert.equal(post.floor_list[0].sub_comment_list?.[0].content, '<img src="./images/image_1.png"><img src="./images/image_3.png">');
+    assert.equal(post.floor_list[0].sub_comment_list?.[0].avatar_url, 'image_3.png');
+    const saved = structuredClone(post);
+    assert.deepEqual(await images.deduplicate_images(post, unique), unique);
+    assert.deepEqual(post, saved);
+    assert.equal(Object.keys(blobs).length, 3, 'Input blobs are not mutated');
+});
+
+test('deduplication leaves failed placeholders distinct and does not mutate a post on missing data or cancellation', async () => {
+    const images = new ImageHandler(async () => { throw new Error('offline'); }, {
+        'https://tiebapic.baidu.com/a.png': 'image_1.png', 'https://tiebapic.baidu.com/b.png': 'image_2.png',
+    });
+    const post: Post = { ...baseline, floor_list: [], image_map: {
+        'https://tiebapic.baidu.com/a.png': 'image_1.png', 'https://tiebapic.baidu.com/b.png': 'image_2.png',
+    } };
+    const original = structuredClone(post);
+    const blobs = await images.download_images();
+    assert.equal(Object.keys(await images.deduplicate_images(post, blobs)).length, 2);
+    assert.deepEqual(images.failed_images.sort(), ['image_1.png', 'image_2.png']);
+    assert.deepEqual(post, original);
+    await assert.rejects(images.deduplicate_images(post, { 'image_1.png': blobs['image_1.png'] }), /缺少已下载的图片: image_2.png/);
+    assert.deepEqual(post, original);
+    const controller = new AbortController();
+    const aborting = new Blob(['image']);
+    aborting.arrayBuffer = async () => { controller.abort(new Error('cancel hashing')); return new ArrayBuffer(0); };
+    await assert.rejects(new ImageHandler().deduplicate_images(post, { ...blobs, 'image_1.png': aborting }, controller.signal), /cancel hashing/);
+    assert.deepEqual(post, original);
+});
+
+test('image normalization supports alias filenames without concealing changes to alias groups', () => {
+    const post: Post = { ...baseline, image_map: { 'https://a.test/1': 'a.png', 'https://a.test/2': 'a.png' },
+        floor_list: [{ index: 1, comment: { author: '甲', date: '2026-10-14', content: '<img src="./images/a.png">', avatar_url: 'a.png' } }] };
+    const renamed = JSON.parse(JSON.stringify(post).replaceAll('a.png', 'renamed.png')) as Post;
+    assert.deepEqual(compare_posts(post, renamed, true), []);
+    assert(renamed.image_map);
+    renamed.image_map['https://a.test/2'] = 'different.png';
+    assert(compare_posts(post, renamed, true).length > 0, 'Splitting or merging alias groups remains visible');
+});
+
 test('image failures are reported, TAR has correct bytes and checksums', async () => {
     const images = new ImageHandler(async url => {
         if (url.endsWith('bad.png')) { throw new Error('offline'); }

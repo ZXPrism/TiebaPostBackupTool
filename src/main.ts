@@ -203,15 +203,17 @@ async function backup_post() {
         // Get image handler and show modal
         const image_handler = parser.get_image_handler();
         const image_map = post.image_map || {};
-        const image_count = Object.keys(image_map).length;
-        download_modal.show(post, image_count);
+        const download_count = Object.keys(image_map).length;
+        download_modal.show(post, download_count);
 
         // Download images with progress callback
-        const image_blobs = await image_handler.download_images((current, total, filename) => {
+        const downloaded_images = await image_handler.download_images((current, total, filename) => {
             if (download_modal) {
                 download_modal.update_progress(current, total, filename);
             }
         });
+        const image_blobs = await image_handler.deduplicate_images(post, downloaded_images);
+        const image_count = Object.keys(image_blobs).length;
 
         // Create viewer HTML
         const viewer_html = image_handler.create_viewer_html(post);
