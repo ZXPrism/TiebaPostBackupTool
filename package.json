@@ -16,7 +16,7 @@
     "login": "node --import tsx scripts/login.ts",
     "login:import": "node --import tsx scripts/login.ts --import",
     "regression": "node --import tsx scripts/compare.ts",
-    "test": "npm run build:all && node --import tsx --test tests/core.test.ts tests/api.test.ts tests/browser.test.ts tests/server.test.ts",
+    "test": "npm run build:all && node --import tsx --test tests/core.test.ts tests/compression.test.ts tests/api.test.ts tests/browser.test.ts tests/server.test.ts",
     "regression:live": "npm run build:service && node --import tsx scripts/regression-live.ts"
   },
   "keywords": [],

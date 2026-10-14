@@ -307,6 +307,23 @@ test('HTTP API and frontend submit, poll, download without an access token', asy
         await page.getByRole('button', { name: '下载 JSON' }).click();
         const download = await downloading;
         assert.equal(download.suggestedFilename(), 'post.json');
+        assert.equal(await readFile(await download.path(), 'utf8'), '{"ok":true}');
+        // Exercise the actual frontend fetch -> Blob -> download path with both encodings.
+        for (const encoding of ['gzip', 'zstd']) {
+            await page.setExtraHTTPHeaders({ 'Accept-Encoding': encoding });
+            for (const [button, endpoint, filename, contents] of [
+                ['下载 JSON', 'post.json', 'post.json', '{"ok":true}'],
+                ['下载备份', 'download', '测试.tar', 'archive'],
+            ]) {
+                const response = page.waitForResponse(value => value.url().endsWith(`/${endpoint}`));
+                const saving = page.waitForEvent('download');
+                await page.getByRole('button', { name: button, exact: true }).click();
+                assert.equal((await response).headers()['content-encoding'], encoding);
+                const saved = await saving;
+                assert.equal(saved.suggestedFilename(), filename);
+                assert.equal(await readFile(await saved.path(), 'utf8'), contents);
+            }
+        }
         await page.screenshot({ path: join(root, 'frontend.png'), fullPage: true });
         console.log(`Frontend screenshot: ${join(root, 'frontend.png')}`);
         await page.setViewportSize({ width: 390, height: 844 });

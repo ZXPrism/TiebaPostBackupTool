@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { JobQueue } from './queue';
 import { project_dir } from './config';
+import { compressed_file, negotiate_encoding } from './compression';
 
 function json(response: ServerResponse, status: number, data: unknown): void {
     response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -57,7 +58,7 @@ export function create_app(queue: JobQueue) {
                 return;
             }
             const match = path.match(/^\/api\/jobs\/([a-f0-9-]{36})(?:\/(download|post\.json))?$/);
-            if (match && request.method === 'GET') {
+            if (match && (request.method === 'GET' || request.method === 'HEAD')) {
                 const job = queue.get(match[1]);
                 if (!job) { json(response, 404, { error: '任务不存在' }); return; }
                 if (!match[2]) { json(response, 200, job); return; }
@@ -66,7 +67,12 @@ export function create_app(queue: JobQueue) {
                 }
                 const is_json = match[2] === 'post.json';
                 const file = join(queue.directory(job.id), is_json ? 'post.json' : 'backup.tar');
-                const info = await stat(file);
+                const encoding = negotiate_encoding(request.headers['accept-encoding']);
+                response.setHeader('Vary', 'Accept-Encoding');
+                if (!encoding) { json(response, 406, { error: '不支持请求指定的传输编码，可使用 zstd、gzip 或 identity' }); return; }
+                const sent_file = encoding === 'identity' ? file : await compressed_file(file, encoding);
+                const info = await stat(sent_file);
+                if (encoding !== 'identity') { response.setHeader('Content-Encoding', encoding); }
                 const filename = is_json ? 'post.json' : job.filename || 'backup.tar';
                 response.writeHead(200, {
                     'Content-Type': is_json ? 'application/json' : 'application/x-tar',
@@ -74,7 +80,8 @@ export function create_app(queue: JobQueue) {
                     'Content-Disposition': `attachment; filename="${is_json ? 'post.json' : 'backup.tar'}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
                     'Cache-Control': 'no-store',
                 });
-                await pipeline(createReadStream(file), response);
+                if (request.method === 'HEAD') { response.end(); return; }
+                await pipeline(createReadStream(sent_file), response);
                 return;
             }
             json(response, 404, { error: '接口不存在' }); return;

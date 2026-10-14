@@ -11,6 +11,7 @@ import { collect_api } from '../shared/api-collector';
 import { create_api_request, RequestPacer } from './api';
 import type { Job, Progress } from './model';
 import { prepare_post_page } from './page-readiness';
+import { prepare_downloads } from './compression';
 
 declare global {
     interface Window { TiebaPage: { PageParser: typeof PageParser } }
@@ -168,6 +169,8 @@ export function create_runner(
             signal.throwIfAborted();
             await writeFile(join(directory, 'backup.tar.tmp'), new Uint8Array(await archive.arrayBuffer()));
             await rename(join(directory, 'backup.tar.tmp'), join(directory, 'backup.tar'));
+            await progress({ stage: '准备下载文件' });
+            await prepare_downloads(directory, signal);
             return {
                 filename: `${post.tieba_name.replace(/[^\p{L}\p{N}_. -]/gu, '_')}_${post.id}.tar`,
                 floor_count: floors.length, image_count, warnings,
