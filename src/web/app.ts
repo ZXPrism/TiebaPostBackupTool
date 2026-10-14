@@ -45,6 +45,7 @@ function reset_selection(): void {
     starting = false;
     last_backups = '';
     element('results').hidden = true;
+    render_active();
     notify('');
 }
 input.addEventListener('input', reset_selection);
@@ -97,32 +98,57 @@ async function download(backup: BackupSummary, json: boolean): Promise<void> {
     setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+let progress_view: {
+    heading: HTMLHeadingElement;
+    bars: { detail: HTMLSpanElement; bar: HTMLProgressElement; fill: HTMLSpanElement }[];
+} | undefined;
+
 function render_active(active?: ActiveBackup): void {
     const container = element('active-backup');
-    container.replaceChildren();
     container.hidden = !active;
-    if (!active) { return; }
-    const text = active.status === 'queued' ? '已进入队列，等待备份'
+    if (!active) {
+        container.replaceChildren();
+        progress_view = undefined;
+        return;
+    }
+    // Keep the same elements between polls so the fill can transition from its current position.
+    if (!progress_view) {
+        const heading = node('h3');
+        container.append(heading, node('p', '关闭页面不会中断备份，稍后输入同一链接即可继续查看进度。', 'hint'));
+        const bars = ['楼层分页', '全帖楼中楼'].map(label => {
+            const group = node('div', '', 'collection-progress');
+            const caption = node('div', '', 'progress-caption');
+            const detail = node('span');
+            caption.append(node('span', label), detail);
+            const track = node('div', '', 'progress-track');
+            const bar = node('progress');
+            bar.setAttribute('aria-label', label);
+            const fill = node('span', '', 'progress-fill');
+            fill.setAttribute('aria-hidden', 'true');
+            track.append(bar, fill);
+            group.append(caption, track);
+            container.append(group);
+            return { detail, bar, fill };
+        });
+        progress_view = { heading, bars };
+    }
+    progress_view.heading.textContent = active.status === 'queued' ? '已进入队列，等待备份'
         : { collection: '正在采集帖子', images: '正在保存图片', packaging: '正在整理备份' }[active.phase];
-    container.append(node('h3', text), node('p', '关闭页面不会中断备份，稍后输入同一链接即可继续查看进度。', 'hint'));
-    const add_progress = (label: string, unit: string, count?: ProgressCount) => {
-        const group = node('div', '', 'collection-progress');
-        const caption = node('div', '', 'progress-caption');
-        const detail = !count ? '等待采集' : count.total === undefined ? `已采集 ${count.current} ${unit}，总量待确认`
+    const bars = progress_view.bars;
+    const update = (index: number, unit: string, count?: ProgressCount) => {
+        const { detail, bar, fill } = bars[index];
+        detail.textContent = !count ? '等待采集' : count.total === undefined ? `已采集 ${count.current} ${unit}，总量待确认`
             : `${count.current} / ${count.complete ? '' : '约 '}${count.total} ${unit}${count.complete ? ' · 已完成' : ''}`;
-        caption.append(node('span', label), node('span', detail));
-        const bar = node('progress');
-        bar.setAttribute('aria-label', label);
         if (!count) { bar.max = 1; bar.value = 0; }
         else if (count.total !== undefined) {
             bar.max = Math.max(count.total, 1);
             bar.value = count.complete ? bar.max : count.current;
-        }
-        group.append(caption, bar);
-        container.append(group);
+        } else { bar.removeAttribute('value'); }
+        // Numeric and accessible progress remain exact; only the visual fill is animated.
+        fill.style.transform = `scaleX(${Math.max(0, bar.position)})`;
     };
-    add_progress('楼层分页', '页', active.collection?.pages);
-    add_progress('全帖楼中楼', '条', active.collection?.replies);
+    update(0, '页', active.collection?.pages);
+    update(1, '条', active.collection?.replies);
 }
 
 /** Parse in an inert template and insert only text; no image or other resource enters the document. */
