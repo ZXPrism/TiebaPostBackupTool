@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { APIRequestContext } from 'playwright';
 import type { ApiRequest } from '../shared/api-collector';
+import type { Log } from './logging';
 
 /** A serial queue with a minimum start interval. Content and image starts use separate instances. */
 export class RequestPacer {
@@ -46,7 +47,7 @@ function retry_after(value: string | undefined): number {
     return Number.isFinite(milliseconds) ? Math.max(0, milliseconds) : 0;
 }
 
-export function create_api_request(context: APIRequestContext, post_url: string, pacer: RequestPacer, signal: AbortSignal): ApiRequest {
+export function create_api_request(context: APIRequestContext, post_url: string, pacer: RequestPacer, signal: AbortSignal, log?: Log): ApiRequest {
     const attempt: ApiRequest = async (path, parameters) => {
         const transport_error = (error: unknown): never => {
             signal.throwIfAborted();
@@ -86,11 +87,19 @@ export function create_api_request(context: APIRequestContext, post_url: string,
         for (let retries = 0; ; retries++) {
             try {
                 // Every attempt uses the shared pacer; Playwright's own retries stay disabled.
-                return await pacer.run(() => attempt(path, parameters), signal);
+                return await pacer.run(async () => {
+                    // Start the request immediately at the paced boundary; disk writes must not shift it.
+                    const [result] = await Promise.all([
+                        attempt(path, parameters), log?.('debug', 'api_request', { path, attempt: retries + 1 }),
+                    ]);
+                    await log?.('debug', 'api_response', { path, attempt: retries + 1 });
+                    return result;
+                }, signal);
             } catch (error) {
                 signal.throwIfAborted();
                 if (!(error instanceof RetryableApiError)) { throw error; }
                 if (retries === 3) { throw new Error(`${error.message}（已重试 3 次，共 4 次请求）`, { cause: error }); }
+                await log?.('warn', 'api_retry', { path, retry: retries + 1, retry_after_ms: error.retry_after_ms, error });
                 // A server-requested delay is additional to the pacer's minimum start interval.
                 let wait = error.retry_after_ms;
                 while (wait > 0) {

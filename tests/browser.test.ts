@@ -411,6 +411,15 @@ test('post lookup is read-only, explicit backup resumes across reloads and diagn
         assert.equal(unavailable.status, 500);
         assert.deepEqual(await unavailable.json(), { error: '暂时无法完成请求，请稍后再试' });
         assert.match(await readFile(join(root, 'service.log'), 'utf8'), /ENOENT/);
+        const service_log = await readFile(join(root, 'service.log'), 'utf8');
+        assert.match(service_log, /"level":"error","event":"http_error"/);
+        assert.match(service_log, /"level":"debug","event":"progress"/);
+        assert.match(service_log, /"level":"warn","event":"partial"/);
+        assert.match(service_log, /"level":"error","event":"failed"/);
+        for (const line of (await readFile(join(root, failed.id, 'job.log'), 'utf8')).trim().split('\n')) {
+            assert(service_log.includes(line), 'Every per-job log record is also in the service log');
+            assert.equal(JSON.parse(line).job_id, failed.id);
+        }
         assert.equal((await fetch(`${origin}/api/jobs/${job.id}/job.log`)).status, 404);
     } finally {
         finish_collection();

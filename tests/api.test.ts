@@ -554,7 +554,9 @@ test('API retries temporary failures at most three times through the shared requ
                         dispose: async () => { disposed++; },
                     } as unknown as APIResponse;
                 } } as unknown as APIRequestContext;
-                const result = create_api_request(context, 'https://tieba.baidu.com/p/123', pacer, signal)(path, parameters);
+                const logs: { level: string; event: string; detail: unknown }[] = [];
+                const result = create_api_request(context, 'https://tieba.baidu.com/p/123', pacer, signal,
+                    async (level, event, detail) => { logs.push({ level, event, detail }); })(path, parameters);
                 if (recover) { assert.deepEqual(await result, { post_list: [] }); }
                 else {
                     await assert.rejects(result, error => {
@@ -567,6 +569,10 @@ test('API retries temporary failures at most three times through the shared requ
                     });
                 }
                 assert.equal(calls, 4);
+                assert.equal(logs.filter(log => log.level === 'debug' && log.event === 'api_request').length, 4);
+                assert.equal(logs.filter(log => log.level === 'warn' && log.event === 'api_retry').length, 3);
+                assert.equal(logs.filter(log => log.event === 'api_response').length, recover ? 1 : 0);
+                assert(!JSON.stringify(logs, (_key, value) => value instanceof Error ? value.stack : value).includes('private'));
                 assert.deepEqual(starts, [0, 1500, 3000, 4500]);
                 assert.equal(disposed, failure === 'timeout' || failure === 'connection' ? (recover ? 1 : 0) : 4);
                 await pacer.run(async () => { starts.push(now); }, signal);

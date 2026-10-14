@@ -50,10 +50,20 @@ async function body(request: IncomingMessage): Promise<unknown> {
 
 export function create_app(queue: JobQueue) {
     return createServer((request, response) => {
+        const started = Date.now();
+        const request_info = { method: request.method, path: request.url?.split('?')[0] };
+        void queue.log('trace', 'http_request', request_info);
+        response.once('finish', () => {
+            const level = response.statusCode >= 500 ? 'error' : response.statusCode >= 400 ? 'warn' : 'info';
+            void queue.log(level, 'http_response', { ...request_info, status: response.statusCode, duration_ms: Date.now() - started });
+        });
+        response.once('close', () => {
+            if (!response.writableFinished) { void queue.log('warn', 'http_disconnected', { ...request_info, duration_ms: Date.now() - started }); }
+        });
         response.setHeader('X-Content-Type-Options', 'nosniff');
         response.setHeader('Referrer-Policy', 'no-referrer');
         void handle(request, response).catch(async error => {
-            await queue.log('http_error', { method: request.method, path: request.url?.split('?')[0], error });
+            await queue.log('error', 'http_error', { method: request.method, path: request.url?.split('?')[0], error });
             if (!response.headersSent) {
                 json(response, 500, { error: '暂时无法完成请求，请稍后再试' });
             } else { response.destroy(); }
@@ -89,7 +99,7 @@ export function create_app(queue: JobQueue) {
                     await queue.submit(post.url);
                     json(response, 202, post_backups(queue, post));
                 } catch (error) {
-                    await queue.log('submit_failed', { post_id: post.id, error });
+                    await queue.log('error', 'submit_failed', { post_id: post.id, error });
                     json(response, 503, { error: '暂时无法开始备份，请稍后再试' });
                 }
                 return;

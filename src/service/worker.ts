@@ -12,6 +12,7 @@ import { create_api_request, RequestPacer } from './api';
 import type { Job, Progress } from './model';
 import { prepare_post_page } from './page-readiness';
 import { prepare_downloads } from './compression';
+import type { Log } from './logging';
 
 declare global {
     interface Window { TiebaPage: { PageParser: typeof PageParser } }
@@ -26,7 +27,7 @@ export interface WorkerResult {
     warnings: string[];
 }
 
-export type Runner = (job: Job, directory: string, progress: (value: Progress) => Promise<void>, signal: AbortSignal) => Promise<WorkerResult>;
+export type Runner = (job: Job, directory: string, progress: (value: Progress) => Promise<void>, signal: AbortSignal, log?: Log) => Promise<WorkerResult>;
 
 async function fetch_image(context: BrowserContext, original: string, post_url: string, before_request?: () => Promise<void>): Promise<Blob> {
     let url = new URL(original, post_url).href;
@@ -61,7 +62,7 @@ export function create_runner(
     pacer = new RequestPacer(config.api_request_interval_ms),
     image_pacer = new RequestPacer(config.image_request_interval_ms),
 ): Runner {
-    return async (job, directory, progress, signal) => {
+    return async (job, directory, progress, signal, log) => {
         signal.throwIfAborted();
         const context = await launch();
         const abort = () => { void context.close().catch(() => undefined); };
@@ -80,7 +81,7 @@ export function create_runner(
             let total_pages = 1;
             if (backend === 'api') {
                 const collection = await collect_api(job.post_id,
-                    create_api_request(context.request, job.url, pacer, signal), progress, signal, config.max_api_pages);
+                    create_api_request(context.request, job.url, pacer, signal, log), progress, signal, config.max_api_pages);
                 ({ floors, warnings, notes, metadata } = collection);
                 total_pages = metadata.page_cnt;
             } else {
