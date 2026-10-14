@@ -169,14 +169,22 @@ test('userscript and headless worker produce identical JSON across pages and del
             assert.equal(job.status, 'complete', job.error || 'Job did not complete');
             assert.equal(job.image_count, 1);
             const cloud_post = JSON.parse(await readFile(join(root, job.id, 'post.json'), 'utf8'));
-            assert.deepEqual(compare_posts(plugin_post, cloud_post), []);
+            assert(plugin_post.backup_date);
+            assert(cloud_post.backup_date);
+            for (const post of [plugin_post, cloud_post]) {
+                assert.equal(new Date(post.backup_date).toISOString(), post.backup_date);
+            }
+            assert.deepEqual(compare_posts({ ...plugin_post, backup_date: cloud_post.backup_date }, cloud_post), []);
             const cloud_files = unpack(await readFile(join(root, job.id, 'backup.tar')));
-            assert.equal(cloud_files.get('post.json'), plugin_files.get('post.json'));
+            assert.deepEqual(JSON.parse(cloud_files.get('post.json') || ''), cloud_post);
             assert(!cloud_files.has('images/image_2.jpg'));
             assert.equal(cloud_files.get('images/image_1.png'), plugin_files.get('images/image_1.png'));
             // Each export has its own backup date; all other HTML must remain identical.
             const without_date = (html: string) => html.replace(/<time class="backup-date" datetime="[^"]+">[^<]+<\/time>/, '<time>backup date</time>');
-            assert.equal(without_date(cloud_files.get('viewer.html') || ''), without_date(plugin_files.get('viewer.html') || ''));
+            assert((cloud_files.get('viewer.html') || '').includes(`datetime="${cloud_post.backup_date}"`));
+            assert((plugin_files.get('viewer.html') || '').includes(`datetime="${plugin_post.backup_date}"`));
+            assert.equal(without_date(cloud_files.get('viewer.html') || ''),
+                without_date(plugin_files.get('viewer.html') || '').replaceAll(plugin_post.backup_date, cloud_post.backup_date));
         } finally { await queue.close(); }
     } finally { await context.close(); }
 });

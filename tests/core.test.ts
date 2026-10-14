@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Post } from '../src/types';
-import { compare_posts } from '../src/shared/regression';
+import { compare_posts, regression_report } from '../src/shared/regression';
 import { finalize_post } from '../src/shared/post';
 import { ImageHandler } from '../src/image_handler';
 import { parse_post_url } from '../src/service/model';
@@ -14,6 +14,23 @@ import { JobQueue } from '../src/service/queue';
 
 const bytes = await readFile('tests/regression/post.json');
 const baseline = JSON.parse(bytes.toString()) as Post;
+
+test('saved backup date drives the viewer and is explicitly accounted for in regression', () => {
+    const post = { ...baseline, backup_date: '2026-10-13T16:44:55.728Z' };
+    const html = new ImageHandler().create_viewer_html(post);
+    assert(html.includes('<time class="backup-date" datetime="2026-10-13T16:44:55.728Z">备份日期：2026/10/14 00:44:55（UTC+8）</time>'));
+    const report = regression_report(baseline, post);
+    assert.deepEqual(report.differences, []);
+    assert.deepEqual(report.accepted_backup_date_differences, [{ path: '$.backup_date', expected: undefined, actual: post.backup_date }]);
+    assert.equal(report.strict_differences.length, 1);
+    assert.equal(regression_report(baseline, post, { strict: true }).differences.length, 1);
+    assert.deepEqual(regression_report(post, { ...post, backup_date: '2026-10-14T00:00:00.000Z' }).differences, []);
+    for (const backup_date of ['', 'invalid', '2026-02-30T00:00:00.000Z']) {
+        assert.equal(regression_report(baseline, { ...post, backup_date }).differences.length, 1);
+    }
+    assert.equal(regression_report(baseline, { ...post, title: 'changed' }).differences.length, 1);
+    assert.equal(baseline.backup_date, undefined, 'Historical baseline stays unchanged');
+});
 
 test('reference JSON stays unchanged; image mapping round trip preserves every field', () => {
     assert.equal(createHash('sha256').update(bytes).digest('hex'), 'e29101d807c27eddff57ec61e6c8b3c18b82f2ef857bf20ca96cb7420d2007f0');

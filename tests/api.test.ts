@@ -429,6 +429,9 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
             offset += 512 + Math.ceil(size / 512) * 512;
         }
         assert.deepEqual(JSON.parse(files.get('post.json') || ''), post);
+        assert(post.backup_date);
+        assert.equal(new Date(post.backup_date).toISOString(), post.backup_date);
+        assert((files.get('viewer.html') || '').includes(`datetime="${post.backup_date}"`));
         assert.match(files.get('viewer.html') || '', /能玩了/);
         assert.equal(JSON.parse(files.get('report.json') || '').backend, 'api');
         assert.equal(JSON.parse(files.get('report.json') || '').image_count, 1);

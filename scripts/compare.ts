@@ -12,6 +12,7 @@ if (paths.length !== 2 || args.some(arg => arg.startsWith('--') && !['--normaliz
     const { differences } = report;
     console.log(`严格比较 ${report.strict_differences.length} 处差异；接受正文连续空格差异 ${report.accepted_space_differences.length} 处`);
     if (report.accepted_space_differences.length) { console.log(JSON.stringify({ accepted_space_differences: report.accepted_space_differences }, null, 2)); }
+    if (report.accepted_backup_date_differences.length) { console.log(JSON.stringify({ accepted_backup_date_differences: report.accepted_backup_date_differences }, null, 2)); }
     if (differences.length) {
         console.error(JSON.stringify(differences, null, 2));
         console.error(`回归失败: ${differences.length} 处差异`);

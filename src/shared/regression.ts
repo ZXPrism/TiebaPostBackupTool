@@ -7,6 +7,7 @@ export interface RegressionReport {
     differences: Difference[];
     strict_differences: Difference[];
     accepted_space_differences: Difference[];
+    accepted_backup_date_differences: Difference[];
 }
 
 /** Only collapse consecutive ASCII spaces in ordinary text, never HTML attributes or preformatted text. */
@@ -31,7 +32,7 @@ export function normalize_content_spaces(content: string): string {
     return result + (stack.length ? rest : rest.replace(/ {2,}/g, ' '));
 }
 
-/** Approved space rule is applied only by the regression entry point; strict comparison remains available. */
+/** Export dates and approved spaces are accepted only here; strict comparison remains available. */
 export function regression_report(expected: Post, actual: Post, options: RegressionOptions = {}): RegressionReport {
     const strict_differences = compare_posts(expected, actual);
     const comparison = options.normalize_images ? compare_posts(expected, actual, true) : strict_differences;
@@ -39,8 +40,14 @@ export function regression_report(expected: Post, actual: Post, options: Regress
         /^\$\.floor_list\[\d+\]\.(?:comment|sub_comment_list\[\d+\])\.content$/.test(difference.path)
         && typeof difference.expected === 'string' && typeof difference.actual === 'string'
         && normalize_content_spaces(difference.expected) === normalize_content_spaces(difference.actual));
-    const accepted = new Set(accepted_space_differences);
-    return { strict_differences, accepted_space_differences, differences: comparison.filter(diff => !accepted.has(diff)) };
+    const valid_date = (value: unknown) => value === undefined || (typeof value === 'string'
+        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+        && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value);
+    const accepted_backup_date_differences = options.strict ? [] : comparison.filter(difference =>
+        difference.path === '$.backup_date' && valid_date(difference.expected) && valid_date(difference.actual));
+    const accepted = new Set([...accepted_space_differences, ...accepted_backup_date_differences]);
+    return { strict_differences, accepted_space_differences, accepted_backup_date_differences,
+        differences: comparison.filter(diff => !accepted.has(diff)) };
 }
 
 function canonicalize(post: Post, normalize_images: boolean): unknown {

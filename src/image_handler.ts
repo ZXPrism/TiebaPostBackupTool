@@ -250,7 +250,7 @@ export class ImageHandler {
     /**
      * Create viewer HTML file.
      */
-    public create_viewer_html(post: Post, backup_date = new Date()): string {
+    public create_viewer_html(post: Post, backup_date = new Date(post.backup_date ?? Date.now())): string {
         const json_data = JSON.stringify(post, null, 2).replace(/</g, '\\u003c');
         const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char);
         const formatted_date = backup_date.toLocaleString('zh-CN', {

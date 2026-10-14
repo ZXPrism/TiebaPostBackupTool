@@ -214,6 +214,7 @@ async function backup_post() {
         });
         const image_blobs = await image_handler.deduplicate_images(post, downloaded_images);
         const image_count = Object.keys(image_blobs).length;
+        post.backup_date = new Date().toISOString();
 
         // Create viewer HTML
         const viewer_html = image_handler.create_viewer_html(post);

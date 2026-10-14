@@ -153,6 +153,7 @@ export function create_runner(
             await progress({ stage: '整理图片' });
             const blobs = await images.deduplicate_images(post, downloaded_images, signal);
             const image_count = Object.keys(blobs).length;
+            post.backup_date = new Date().toISOString();
             await writeFile(join(directory, 'post.json.tmp'), JSON.stringify(post, null, 2));
             await rename(join(directory, 'post.json.tmp'), join(directory, 'post.json'));
             warnings.push(...images.failed_images.map(name => `图片下载失败（已用占位图替代）: ${name}`));

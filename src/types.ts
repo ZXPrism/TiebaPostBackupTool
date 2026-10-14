@@ -9,6 +9,7 @@ export interface Post {
     comment_cnt: number,
     floor_list: Floor[],
     image_map?: ImageMap, // Mapping of original URLs to new names
+    backup_date?: string, // ISO 8601 export timestamp; absent in older backups.
 }
 
 export interface Floor {
