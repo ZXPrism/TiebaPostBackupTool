@@ -6,6 +6,31 @@ import { pipeline } from 'node:stream/promises';
 import type { JobQueue } from './queue';
 import { project_dir } from './config';
 import { compressed_file, negotiate_encoding } from './compression';
+import { parse_post_url, type Job } from './model';
+import type { ActiveBackup, PostBackups, Snapshot } from '../shared/service-contract';
+import type { Post } from '../types';
+
+function active_backup(job: Job): ActiveBackup {
+    const phase = job.progress.stage === '下载图片' ? 'images'
+        : ['整理图片', '打包文件', '准备下载文件'].includes(job.progress.stage) ? 'packaging' : 'collection';
+    const count = (value: NonNullable<Job['progress']['collection']>['pages']) =>
+        ({ current: value.current, total: value.total, complete: value.complete });
+    const collection = job.progress.collection;
+    return { status: job.status === 'queued' ? 'queued' : 'running', phase,
+        collection: collection ? { pages: count(collection.pages), replies: collection.replies ? count(collection.replies) : undefined } : undefined };
+}
+
+function post_backups(queue: JobQueue, post: { id: number; url: string }): PostBackups {
+    const jobs = queue.list().filter(job => job.post_id === post.id);
+    const active = jobs.find(job => job.status === 'queued' || job.status === 'running');
+    const backups = jobs.filter(job => job.status === 'complete' || job.status === 'partial').map(job => ({
+        id: job.id, title: job.title || `帖子 ${post.id}`, backup_date: job.backup_date || job.updated_at,
+        filename: job.filename || 'backup.tar', floor_count: job.floor_count, image_count: job.image_count,
+        partial: job.status === 'partial',
+    })).sort((a, b) => b.backup_date.localeCompare(a.backup_date));
+    return { post_id: post.id, url: post.url, backups, active: active ? active_backup(active) : undefined,
+        last_attempt_failed: !active && jobs[0]?.status === 'failed' };
+}
 
 function json(response: ServerResponse, status: number, data: unknown): void {
     response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -27,9 +52,10 @@ export function create_app(queue: JobQueue) {
     return createServer((request, response) => {
         response.setHeader('X-Content-Type-Options', 'nosniff');
         response.setHeader('Referrer-Policy', 'no-referrer');
-        void handle(request, response).catch(error => {
+        void handle(request, response).catch(async error => {
+            await queue.log('http_error', { method: request.method, path: request.url?.split('?')[0], error });
             if (!response.headersSent) {
-                json(response, 500, { error: error instanceof Error ? error.message : '服务器错误' });
+                json(response, 500, { error: '暂时无法完成请求，请稍后再试' });
             } else { response.destroy(); }
         });
     });
@@ -46,24 +72,41 @@ export function create_app(queue: JobQueue) {
                     json(response, 403, { error: '仅接受本站发起的 JSON 请求' }); return;
                 }
             }
-            if (path === '/api/jobs' && request.method === 'GET') {
-                json(response, 200, queue.list()); return;
+            if (path === '/api/posts' && request.method === 'GET') {
+                let post;
+                try { post = parse_post_url(url.searchParams.get('url')); }
+                catch (error) { json(response, 400, { error: (error as Error).message }); return; }
+                json(response, 200, post_backups(queue, post)); return;
             }
             if (path === '/api/jobs' && request.method === 'POST') {
+                let data;
+                try { data = await body(request) as { url?: unknown } | null; }
+                catch { json(response, 400, { error: '请求内容无效' }); return; }
+                let post;
+                try { post = parse_post_url(data?.url); }
+                catch (error) { json(response, 400, { error: (error as Error).message }); return; }
                 try {
-                    const data = await body(request) as { url?: unknown } | null;
-                    const job = await queue.submit(data?.url);
-                    json(response, 202, job);
-                } catch (error) { json(response, 400, { error: error instanceof Error ? error.message : '请求无效' }); }
+                    await queue.submit(post.url);
+                    json(response, 202, post_backups(queue, post));
+                } catch (error) {
+                    await queue.log('submit_failed', { post_id: post.id, error });
+                    json(response, 503, { error: '暂时无法开始备份，请稍后再试' });
+                }
                 return;
             }
-            const match = path.match(/^\/api\/jobs\/([a-f0-9-]{36})(?:\/(download|post\.json))?$/);
+            const match = path.match(/^\/api\/jobs\/([a-f0-9-]{36})\/(download|post\.json|snapshot)$/);
             if (match && (request.method === 'GET' || request.method === 'HEAD')) {
                 const job = queue.get(match[1]);
                 if (!job) { json(response, 404, { error: '任务不存在' }); return; }
-                if (!match[2]) { json(response, 200, job); return; }
                 if (!['complete', 'partial'].includes(job.status)) {
                     json(response, 409, { error: '任务尚未生成可下载的备份' }); return;
+                }
+                if (match[2] === 'snapshot') {
+                    const post = JSON.parse(await readFile(join(queue.directory(job.id), 'post.json'), 'utf8')) as Post;
+                    const snapshot: Snapshot = { floors: post.floor_list.slice(0, 5).map(floor => ({
+                        index: floor.index, author: floor.comment.author, date: floor.comment.date, content: floor.comment.content,
+                    })) };
+                    json(response, 200, snapshot); return;
                 }
                 const is_json = match[2] === 'post.json';
                 const file = join(queue.directory(job.id), is_json ? 'post.json' : 'backup.tar');

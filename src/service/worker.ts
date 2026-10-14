@@ -18,6 +18,8 @@ declare global {
 }
 
 export interface WorkerResult {
+    title?: string;
+    backup_date?: string;
     filename: string;
     floor_count: number;
     image_count: number;
@@ -84,9 +86,13 @@ export function create_runner(
             } else {
                 page = await context.newPage();
                 page.on('dialog', dialog => { void dialog.dismiss(); });
+                let reply_count = 0;
                 for (let number = 1; number <= total_pages; number++) {
                     signal.throwIfAborted();
-                    await progress({ stage: '采集帖子', current: number, total: total_pages });
+                    await progress({ stage: '采集帖子', current: number, total: total_pages, collection: {
+                        pages: { current: number - 1, total: metadata ? total_pages : undefined, complete: false },
+                        replies: { current: reply_count, complete: false },
+                    } });
                     const response = await page.goto(`${job.url}?pn=${number}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
                     await prepare_post_page(page, response);
                     if (new URL(page.url()).pathname !== `/p/${job.post_id}`
@@ -115,8 +121,13 @@ export function create_runner(
                         throw new Error(`第 ${number} 页出现重复楼层，停止采集`);
                     }
                     floors.push(...result.floors);
+                    reply_count += result.floors.reduce((count, floor) => count + (floor.sub_comment_list?.length || 0), 0);
                     warnings.push(...result.warnings.map(message => `第 ${number} 页: ${message}`));
-                    await progress({ stage: '采集帖子', current: number, total: total_pages });
+                    const complete = number === total_pages;
+                    await progress({ stage: '采集帖子', current: number, total: total_pages, collection: {
+                        pages: { current: number, total: total_pages, complete },
+                        replies: { current: reply_count, total: complete ? reply_count : undefined, complete },
+                    } });
                     if (number < total_pages) { await page.waitForTimeout(1000); }
                 }
             }
@@ -172,6 +183,7 @@ export function create_runner(
             await progress({ stage: '准备下载文件' });
             await prepare_downloads(directory, signal);
             return {
+                title: post.title, backup_date: post.backup_date,
                 filename: `${post.tieba_name.replace(/[^\p{L}\p{N}_. -]/gu, '_')}_${post.id}.tar`,
                 floor_count: floors.length, image_count, warnings,
             };

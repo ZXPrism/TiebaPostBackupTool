@@ -1,6 +1,6 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, type Browser, type BrowserContext } from 'playwright';
@@ -261,65 +261,134 @@ test('offline viewer renders a large archive without reparsing previously render
     } finally { await page.close(); }
 });
 
-test('HTTP API and frontend submit, poll, download without an access token', async () => {
+test('post lookup is read-only, explicit backup resumes across reloads and diagnostics stay in logs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tieba-http-'));
+    const history = ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'];
+    const snapshot_content = '正文 &amp; 换行<br>第二行<img src="https://example.com/should-not-load.png" alt="[笑]">'
+        + '<script>window.snapshotExecuted=true</script><iframe src="https://example.com/iframe"></iframe>';
+    const make_post = (date: string) => ({ ...metadata, backup_date: date,
+        floor_list: [{ index: 1, comment: { author: '作者', date: '2000-01-01', content: snapshot_content } }] });
+    // Legacy records lack metadata: read their actual backup date/title from post.json, not job creation time.
+    for (const [index, id] of history.entries()) {
+        const directory = join(root, id);
+        await mkdir(directory);
+        await writeFile(join(directory, 'job.json'), JSON.stringify({ id, post_id, url: base, status: 'complete',
+            created_at: `2005-01-0${2 - index}T00:00:00.000Z`, updated_at: '2005-01-01T00:00:00.000Z',
+            progress: { stage: 'INTERNAL_STAGE' }, warnings: ['INTERNAL_WARNING'], filename: '历史.tar', floor_count: 1, image_count: 0 }));
+        await writeFile(join(directory, 'post.json'), JSON.stringify(make_post(`2001-01-0${index + 1}T00:00:00.000Z`)));
+        await writeFile(join(directory, 'backup.tar'), 'history archive');
+    }
     let finish_collection = () => {};
     const collecting = new Promise<void>(resolve => { finish_collection = resolve; });
+    let runs = 0;
+    const latest_post = JSON.stringify(make_post('2026-01-01T00:00:00.000Z'));
     const queue = new JobQueue(root, async (_job, directory, progress) => {
-        await progress({ stage: '采集第 117 楼的楼中楼', current: 0, total: 5,
+        runs++;
+        if (runs > 1) { throw new Error('INTERNAL_FAILURE: /private/path API attempt 3'); }
+        await progress({ stage: 'INTERNAL_STAGE: 采集第 117 楼的楼中楼', current: 0, total: 5,
             collection: { pages: { current: 381, total: 381, complete: true }, replies: { current: 410, total: 20000, complete: false } } });
         await collecting;
-        await writeFile(join(directory, 'post.json'), '{"ok":true}');
+        await writeFile(join(directory, 'post.json'), latest_post);
         await writeFile(join(directory, 'backup.tar'), 'archive');
-        return { filename: '测试.tar', floor_count: 28, image_count: 24, warnings: ['模拟图片失败'] };
+        return { title: '最新结果', backup_date: '2026-01-01T00:00:00.000Z', filename: '测试.tar', floor_count: 28, image_count: 24, warnings: ['INTERNAL_WARNING'] };
     });
     await queue.initialize();
     const server = create_app(queue);
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
-    if (!address || typeof address === 'string') { throw new Error('No address'); }
+    assert(address && typeof address !== 'string');
     const origin = `http://127.0.0.1:${address.port}`;
     const page = await browser.newPage();
+    const requests: string[] = [];
+    page.on('request', request => requests.push(request.url()));
+    const query = async (value = `${base}/?pn=30&pid=456&share=复制链接#456`) => {
+        await page.locator('#post-url').fill(value);
+        await page.getByRole('button', { name: '查询备份' }).click();
+        await page.locator('#results').waitFor();
+    };
     try {
-        assert.equal((await fetch(`${origin}/api/jobs`)).status, 200);
+        assert.equal((await fetch(`${origin}/api/jobs`)).status, 404);
+        assert.equal((await fetch(`${origin}/api/jobs/${history[0]}`)).status, 404);
         const headers = { 'Content-Type': 'application/json' };
         assert.equal((await fetch(`${origin}/api/jobs`, { method: 'POST', headers: { ...headers, Origin: 'https://evil.test' }, body: '{"url":"123"}' })).status, 403);
         assert.equal((await fetch(`${origin}/api/jobs`, { method: 'POST', headers, body: '{"url":"http://127.0.0.1"}' })).status, 400);
         await page.goto(origin);
-        await page.locator('#post-url').fill(`${base}/?pn=30&pid=456&share=复制链接#456`);
-        await page.locator('#submit').click();
+        assert.equal(await page.locator('#results').isVisible(), false);
+        assert.equal(requests.some(url => url.includes('/api/')), false, 'Opening the page does not enumerate jobs');
+        await query('999999');
+        assert.match(await page.locator('#backups').innerText(), /暂无可下载/);
+        assert.equal(runs, 0);
+        await query();
+        assert.equal(await page.locator('#backups .job').count(), 2);
+        assert.equal(await page.locator('#backups time').first().getAttribute('datetime'), '2001-01-02T00:00:00.000Z');
+        assert.equal(runs, 0, 'Lookup never starts a backup, even when history exists');
+        assert.equal(await page.getByRole('button', { name: '开始备份', exact: true }).isVisible(), true);
+        await page.locator('.snapshot summary').first().click();
+        await page.locator('.snapshot-text').first().waitFor();
+        assert.equal(await page.locator('.snapshot-text').first().textContent(), '正文 & 换行\n第二行[笑]');
+        assert.equal(await page.locator('img, iframe').count(), 0);
+        assert(!requests.some(url => url.includes('example.com')));
+        assert(!await page.evaluate(() => 'snapshotExecuted' in window));
+        const polled = page.waitForResponse(response => response.url().includes('/api/posts?'));
+        await polled;
+        assert.equal(await page.locator('.snapshot').first().getAttribute('open'), '');
+        await page.getByRole('button', { name: '开始备份', exact: true }).click();
         await page.getByRole('progressbar', { name: '全帖楼中楼' }).waitFor();
+        const deadline = Date.now() + 5000;
+        while (await page.getByRole('progressbar', { name: '全帖楼中楼' }).getAttribute('value') !== '410' && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
         assert.equal(await page.getByRole('progressbar').count(), 2);
         assert.equal(await page.getByRole('progressbar', { name: '楼层分页' }).getAttribute('value'), '381');
-        const replies = page.getByRole('progressbar', { name: '全帖楼中楼' });
-        assert.equal(await replies.getAttribute('value'), '410');
-        assert.equal(await replies.getAttribute('max'), '20000');
-        assert.match(await page.locator('.job').innerText(), /410 \/ 约 20000 条/);
-        const saved = JSON.parse(await readFile(join(root, queue.list()[0].id, 'job.json'), 'utf8'));
-        assert.equal(saved.post_id, post_id);
-        assert.equal(saved.url, base, 'Link suffixes do not change the post or starting page');
-        assert.equal(saved.progress.collection.replies.current, 410);
+        assert.equal(await page.getByRole('progressbar', { name: '全帖楼中楼' }).getAttribute('value'), '410');
+        assert.equal(await page.getByRole('progressbar', { name: '全帖楼中楼' }).getAttribute('max'), '20000');
+        assert.equal(await page.locator('#start-backup').isVisible(), false);
+        assert.equal(await page.locator('#backups .job').count(), 2);
+        const job = queue.list().find(job => job.status === 'running');
+        assert(job);
+        assert.equal(job.url, base);
+        const lookup = await (await fetch(`${origin}/api/posts?url=${post_id}`)).json();
+        assert(!JSON.stringify(lookup).includes('INTERNAL'));
+        const duplicate = await fetch(`${origin}/api/jobs`, { method: 'POST', headers, body: JSON.stringify({ url: base }) });
+        assert.equal(duplicate.status, 202);
+        assert(!JSON.stringify(await duplicate.json()).includes('INTERNAL'));
+        assert.equal(runs, 1);
+        const queued_response = await fetch(`${origin}/api/jobs`, { method: 'POST', headers, body: '{"url":"999999"}' });
+        const queued = await queued_response.json();
+        assert.equal(queued.active.status, 'queued');
+        await query('999999');
+        assert.match(await page.locator('#active-backup').innerText(), /已进入队列/);
+        assert.equal(await page.getByRole('progressbar').count(), 2);
+        assert.equal(await page.locator('#start-backup').isVisible(), false);
+        assert.equal(await page.locator('#backups .job').count(), 0, 'Other posts do not expose this post’s history');
+        assert.equal(runs, 1, 'Querying a queued post does not start another worker');
+        await page.reload();
+        assert.equal(await page.locator('#results').isVisible(), false);
+        await query();
+        assert.equal(await page.getByRole('progressbar', { name: '全帖楼中楼' }).getAttribute('value'), '410');
+        assert.equal(await page.locator('#start-backup').isVisible(), false);
+        assert.equal(await page.locator('#backups .job').count(), 2);
+        assert.equal(runs, 1);
         await page.setViewportSize({ width: 390, height: 844 });
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
         await page.screenshot({ path: join(root, 'collection-progress.png'), fullPage: true });
         console.log(`Progress screenshot: ${join(root, 'collection-progress.png')}`);
         finish_collection();
-        await page.locator('.badge.partial').waitFor();
-        const downloading = page.waitForEvent('download');
-        await page.getByRole('button', { name: '下载 JSON' }).click();
-        const download = await downloading;
-        assert.equal(download.suggestedFilename(), 'post.json');
-        assert.equal(await readFile(await download.path(), 'utf8'), '{"ok":true}');
-        // Exercise the actual frontend fetch -> Blob -> download path with both encodings.
+        await page.getByRole('heading', { name: '最新结果' }).waitFor();
+        assert.equal(await page.locator('#backups .job').count(), 3);
+        assert.equal(await page.locator('#start-backup').isVisible(), true);
+        assert.equal(await page.getByRole('progressbar').count(), 0);
+        assert(!await page.getByRole('button', { name: '重新备份' }).count());
+        assert(!((await page.locator('body').innerText()).includes('INTERNAL')));
         for (const encoding of ['gzip', 'zstd']) {
             await page.setExtraHTTPHeaders({ 'Accept-Encoding': encoding });
             for (const [button, endpoint, filename, contents] of [
-                ['下载 JSON', 'post.json', 'post.json', '{"ok":true}'],
+                ['下载 JSON', 'post.json', 'post.json', latest_post],
                 ['下载备份', 'download', '测试.tar', 'archive'],
             ]) {
                 const response = page.waitForResponse(value => value.url().endsWith(`/${endpoint}`));
                 const saving = page.waitForEvent('download');
-                await page.getByRole('button', { name: button, exact: true }).click();
+                await page.locator('#backups .job').first().getByRole('button', { name: button, exact: true }).click();
                 assert.equal((await response).headers()['content-encoding'], encoding);
                 const saved = await saving;
                 assert.equal(saved.suggestedFilename(), filename);
@@ -328,12 +397,25 @@ test('HTTP API and frontend submit, poll, download without an access token', asy
         }
         await page.screenshot({ path: join(root, 'frontend.png'), fullPage: true });
         console.log(`Frontend screenshot: ${join(root, 'frontend.png')}`);
-        await page.setViewportSize({ width: 390, height: 844 });
-        assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
-        const job = queue.list()[0];
-        const response = await fetch(`${origin}/api/jobs/${job.id}/download`, { headers });
-        assert.equal(await response.text(), 'archive');
-        assert(response.headers.get('content-disposition')?.includes("filename*=UTF-8''"));
+        await page.getByRole('button', { name: '开始备份', exact: true }).click();
+        await page.locator('#last-failure').waitFor();
+        assert.equal(await page.locator('#start-backup').isVisible(), true);
+        assert.equal(await page.locator('#backups .job').count(), 3);
+        assert(!((await page.locator('body').innerText()).includes('INTERNAL')));
+        const failed = queue.list().find(job => job.status === 'failed' && job.post_id === post_id);
+        assert(failed);
+        assert.match(await readFile(join(root, failed.id, 'job.log'), 'utf8'), /INTERNAL_FAILURE/);
+        const after_failure = await (await fetch(`${origin}/api/posts?url=${post_id}`)).json();
+        assert.equal(after_failure.last_attempt_failed, true);
+        assert(!JSON.stringify(after_failure).includes('INTERNAL'));
+        assert.match(await readFile(join(root, job.id, 'job.log'), 'utf8'), /INTERNAL_STAGE/);
+        assert.match(await readFile(join(root, job.id, 'job.log'), 'utf8'), /INTERNAL_WARNING/);
+        await unlink(join(root, history[0], 'backup.tar'));
+        const unavailable = await fetch(`${origin}/api/jobs/${history[0]}/download`);
+        assert.equal(unavailable.status, 500);
+        assert.deepEqual(await unavailable.json(), { error: '暂时无法完成请求，请稍后再试' });
+        assert.match(await readFile(join(root, 'service.log'), 'utf8'), /ENOENT/);
+        assert.equal((await fetch(`${origin}/api/jobs/${job.id}/job.log`)).status, 404);
     } finally {
         finish_collection();
         await page.close();

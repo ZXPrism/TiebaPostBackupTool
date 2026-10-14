@@ -16,6 +16,8 @@ export interface Job {
     filename?: string;
     floor_count?: number;
     image_count?: number;
+    title?: string;
+    backup_date?: string;
 }
 
 export function parse_post_url(input: unknown): { id: number; url: string } {

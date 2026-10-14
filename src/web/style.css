@@ -38,4 +38,10 @@ progress { width: 100%; height: 6px; accent-color: #326950; }
 .progress-caption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; line-height: 1.7; }
 .progress-caption span:last-child { color: #74817a; font-variant-numeric: tabular-nums; }
 footer { font-size: 12px; margin-top: 36px; }
+[hidden] { display: none !important; }
+.backups-heading { font-size: 16px; margin: 28px 0 16px; }
+#active-backup h3 { margin-top: 0; font-size: 16px; }
+.job time { display: block; margin-top: 10px; }
+.snapshot-floor { border-top: 1px solid #dde4dc; padding: 8px 0; }
+.snapshot-text { white-space: pre-wrap; color: #233b36; }
 @media (max-width: 550px) { main { margin-top: 36px; } .panel, .job { padding: 20px; } .input-row { flex-direction: column; } .job-heading { align-items: flex-start; } }

@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from './config';
 import { parse_post_url, type Job, type Progress } from './model';
 import type { Runner } from './worker';
+import type { Post } from '../types';
 
 /** A single worker with durable job records. Interrupted jobs are never reported as complete. */
 export class JobQueue {
@@ -28,10 +29,18 @@ export class JobQueue {
                     job.error = '服务在任务完成前停止，请重新提交';
                     job.updated_at = new Date().toISOString();
                     await this.save(job);
+                    await this.log('interrupted', job.error, job.id);
+                }
+                if (['complete', 'partial'].includes(job.status) && (!job.title || !job.backup_date)) {
+                    try {
+                        const post = JSON.parse(await readFile(join(this.directory(job.id), 'post.json'), 'utf8')) as Post;
+                        job.title = post.title;
+                        job.backup_date = post.backup_date || job.updated_at;
+                    } catch (error) { await this.log('backup_metadata_unavailable', error, job.id); }
                 }
                 this.jobs.set(job.id, job);
-            } catch {
-                console.warn(`忽略不可读取的任务记录: ${name}`);
+            } catch (error) {
+                await this.log('job_record_unreadable', { id: name, error });
             }
         }
         this.start();
@@ -40,6 +49,13 @@ export class JobQueue {
     get(id: string): Job | undefined { return this.jobs.get(id); }
     list(): Job[] { return [...this.jobs.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)); }
     directory(id: string): string { return join(this.root, id); }
+
+    async log(event: string, detail: unknown, id?: string): Promise<void> {
+        const line = JSON.stringify({ time: new Date().toISOString(), event, detail }, (_key, value: unknown) =>
+            value instanceof Error ? { message: value.message, stack: value.stack } : value);
+        try { await appendFile(join(id ? this.directory(id) : this.root, id ? 'job.log' : 'service.log'), line + '\n'); }
+        catch (error) { console.error('日志写入失败', error, line); }
+    }
 
     async submit(input: unknown): Promise<Job> {
         if (this.stopped) { throw new Error('服务正在停止'); }
@@ -56,6 +72,7 @@ export class JobQueue {
         this.jobs.set(job.id, job);
         try { await this.save(job); }
         catch (error) { this.jobs.delete(job.id); throw error; }
+        await this.log('queued', { post_id: job.post_id }, job.id);
         this.start();
         return job;
     }
@@ -75,8 +92,8 @@ export class JobQueue {
     private start(): void {
         if (this.running || this.stopped) { return; }
         this.running = true;
-        this.task = this.drain().catch(error => {
-            console.error('任务队列停止:', error instanceof Error ? error.message : '未知错误');
+        this.task = this.drain().catch(async error => {
+            await this.log('queue_stopped', error);
             this.stopped = true;
         }).finally(() => {
             this.running = false;
@@ -92,23 +109,27 @@ export class JobQueue {
             job.status = 'running';
             job.updated_at = new Date().toISOString();
             await this.save(job);
+            await this.log('started', { post_id: job.post_id }, job.id);
             const controller = new AbortController();
             this.current = controller;
             const timer = setTimeout(() => controller.abort(new Error(`任务运行超过 ${config.job_timeout_ms / 60000} 分钟，已中止`)), config.job_timeout_ms);
             try {
                 const result = await this.runner(job, this.directory(job.id), async (progress: Progress) => {
-                    job.progress = progress;
+                    job.progress = { ...progress, collection: progress.collection ?? job.progress.collection };
                     job.updated_at = new Date().toISOString();
                     await this.save(job);
+                    await this.log('progress', progress, job.id);
                 }, controller.signal);
                 controller.signal.throwIfAborted();
                 Object.assign(job, result);
                 job.status = result.warnings.length ? 'partial' : 'complete';
                 job.progress = { stage: job.status === 'partial' ? '部分完成' : '备份完成' };
+                await this.log(job.status, result, job.id);
             } catch (error) {
                 job.status = 'failed';
                 job.error = error instanceof Error ? error.message : String(error);
                 job.progress = { stage: '备份失败' };
+                await this.log('failed', error, job.id);
             } finally {
                 clearTimeout(timer);
                 this.current = undefined;

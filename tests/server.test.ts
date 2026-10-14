@@ -28,9 +28,10 @@ for (const backend of ['browser', 'api']) {
                 child.once('close', () => reject(new Error(stderr || 'Service exited before listening')));
             });
             assert.equal(await readFile(join(directory, 'server.lock'), 'utf8'), String(child.pid));
-            const response = await fetch(`${origin}/api/jobs`);
+            const response = await fetch(`${origin}/api/posts?url=123`);
             assert.equal(response.status, 200);
-            assert.deepEqual(await response.json(), []);
+            assert.deepEqual(await response.json(), { post_id: 123, url: 'https://tieba.baidu.com/p/123', backups: [], last_attempt_failed: false });
+            assert.equal((await fetch(`${origin}/api/jobs`)).status, 404);
             assert.equal((await fetch(origin)).status, 200);
             assert.equal((await fetch(`${origin}/.data/browser/Default/Cookies`)).status, 404);
         } finally {
