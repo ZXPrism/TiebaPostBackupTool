@@ -380,20 +380,16 @@ test('post lookup is read-only, explicit backup resumes across reloads and diagn
         assert.equal(await page.getByRole('progressbar').count(), 0);
         assert(!await page.getByRole('button', { name: '重新备份' }).count());
         assert(!((await page.locator('body').innerText()).includes('INTERNAL')));
+        assert.equal(await page.getByRole('button', { name: '下载 JSON' }).count(), 0);
         for (const encoding of ['gzip', 'zstd']) {
             await page.setExtraHTTPHeaders({ 'Accept-Encoding': encoding });
-            for (const [button, endpoint, filename, contents] of [
-                ['下载 JSON', 'post.json', 'post.json', latest_post],
-                ['下载备份', 'download', '测试.tar', 'archive'],
-            ]) {
-                const response = page.waitForResponse(value => value.url().endsWith(`/${endpoint}`));
-                const saving = page.waitForEvent('download');
-                await page.locator('#backups .job').first().getByRole('button', { name: button, exact: true }).click();
-                assert.equal((await response).headers()['content-encoding'], encoding);
-                const saved = await saving;
-                assert.equal(saved.suggestedFilename(), filename);
-                assert.equal(await readFile(await saved.path(), 'utf8'), contents);
-            }
+            const response = page.waitForResponse(value => value.url().endsWith('/download'));
+            const saving = page.waitForEvent('download');
+            await page.locator('#backups .job').first().getByRole('button', { name: '下载备份', exact: true }).click();
+            assert.equal((await response).headers()['content-encoding'], encoding);
+            const saved = await saving;
+            assert.equal(saved.suggestedFilename(), '测试.tar');
+            assert.equal(await readFile(await saved.path(), 'utf8'), 'archive');
         }
         await page.screenshot({ path: join(root, 'frontend.png'), fullPage: true });
         console.log(`Frontend screenshot: ${join(root, 'frontend.png')}`);

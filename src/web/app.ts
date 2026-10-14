@@ -86,12 +86,12 @@ start.addEventListener('click', () => {
         });
 });
 
-async function download(backup: BackupSummary, json: boolean): Promise<void> {
-    const response = await api(`/api/jobs/${backup.id}/${json ? 'post.json' : 'download'}`);
+async function download(backup: BackupSummary): Promise<void> {
+    const response = await api(`/api/jobs/${backup.id}/download`);
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement('a');
     link.href = url;
-    link.download = json ? 'post.json' : backup.filename;
+    link.download = backup.filename;
     document.body.append(link);
     link.click();
     link.remove();
@@ -211,15 +211,13 @@ function render(result: PostBackups): void {
         if (backup.floor_count !== undefined) { card.append(node('p', `${backup.floor_count} 个楼层 · ${backup.image_count ?? 0} 张图片`, 'meta')); }
         card.append(preview(backup));
         const actions = node('div', '', 'actions');
-        for (const is_json of [false, true]) {
-            const button = node('button', is_json ? '下载 JSON' : '下载备份', is_json ? 'secondary' : '');
-            button.addEventListener('click', () => {
-                button.disabled = true;
-                void download(backup, is_json).catch(() => notify('暂时无法下载，请稍后再试', true))
-                    .finally(() => { button.disabled = false; });
-            });
-            actions.append(button);
-        }
+        const button = node('button', '下载备份');
+        button.addEventListener('click', () => {
+            button.disabled = true;
+            void download(backup).catch(() => notify('暂时无法下载，请稍后再试', true))
+                .finally(() => { button.disabled = false; });
+        });
+        actions.append(button);
         card.append(actions);
         fragment.append(card);
     }
