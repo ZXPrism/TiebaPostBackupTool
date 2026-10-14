@@ -253,6 +253,7 @@ export class ImageHandler {
     public create_viewer_html(post: Post, backup_date = new Date(post.backup_date ?? Date.now())): string {
         const json_data = JSON.stringify(post, null, 2).replace(/</g, '\\u003c');
         const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char);
+        const post_url = `https://tieba.baidu.com/p/${post.id}`;
         const formatted_date = backup_date.toLocaleString('zh-CN', {
             timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
             hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
@@ -291,6 +292,10 @@ export class ImageHandler {
             margin-bottom: 10px;
             color: #888;
             font-size: 12px;
+        }
+        .header .original-post {
+            margin-bottom: 10px;
+            overflow-wrap: anywhere;
         }
         .floor {
             background: white;
@@ -398,6 +403,7 @@ export class ImageHandler {
     <div class="header">
         <h1>${escape(post.title)}</h1>
         <time class="backup-date" datetime="${backup_date.toISOString()}">备份日期：${escape(formatted_date)}（UTC+8）</time>
+        <div class="meta original-post">原帖：<a class="author-link" href="${escape(post_url)}" target="_blank" rel="noopener noreferrer">${escape(post_url)}</a></div>
         <div class="meta">
             贴吧: <a class="author-link" href="${escape(post.tieba_url)}" target="_blank">${escape(post.tieba_name)}</a> |
             楼层: ${post.floor_list.length} |
