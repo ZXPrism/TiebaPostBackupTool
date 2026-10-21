@@ -1,3 +1,5 @@
+import { create_viewer_html } from '../src/viewer';
+import { create_tar } from '../src/archive';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
@@ -75,7 +77,7 @@ test('phase estimates handle missing samples, unknown totals, empty work and cou
 
 test('saved backup date drives the viewer and is explicitly accounted for in regression', () => {
     const post = { ...baseline, backup_date: '2026-10-13T16:44:55.728Z' };
-    const html = new ImageHandler().create_viewer_html(post);
+    const html = create_viewer_html(post);
     assert(html.includes('<time class="backup-date" datetime="2026-10-13T16:44:55.728Z">备份日期：2026/10/14 00:44:55（UTC+8）</time>'));
     const report = regression_report(baseline, post);
     assert.deepEqual(report.differences, []);
@@ -237,7 +239,7 @@ test('image failures are reported, TAR has correct bytes and checksums', async (
     assert.deepEqual(images.failed_images, ['image_2.png']);
     assert.equal(await results['image_1.png'].text(), 'image');
     assert.equal(results['image_2.png'].type, 'image/svg+xml');
-    const tar = new Uint8Array(await (await images.create_tar({ 'post.json': '测试内容', 'images/image_1.png': results['image_1.png'] })).arrayBuffer());
+    const tar = new Uint8Array(await (await create_tar({ 'post.json': '测试内容', 'images/image_1.png': results['image_1.png'] })).arrayBuffer());
     const decoder = new TextDecoder();
     assert.equal(decoder.decode(tar.slice(0, 9)), 'post.json');
     const length = parseInt(decoder.decode(tar.slice(124, 135)), 8);

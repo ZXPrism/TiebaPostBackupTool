@@ -96,7 +96,10 @@ npm run regression:live -- tests/regression/post.json
 - `src/shared/page-parser.ts`：插件在页面中执行的 DOM 提取、滚动与楼中楼分页。
 - `src/shared/api-collector.ts`：独立于请求传输的接口分页、完整性检查和内容转换；本轮仅服务接入。
 - `src/service/api.ts`：PC 接口签名与传输、请求排队和间隔控制。
-- `src/shared/post.ts`、`src/image_handler.ts`：共享的数据整理、图片映射和导出；图片下载可注入不同传输实现。
+- `src/shared/post.ts`：帖子数据整理。
+- `src/image_handler.ts`：图片下载、映射及去重；可注入图片传输实现。
+- `src/viewer.ts`：离线查看器 HTML、样式和交互脚本。
+- `src/archive.ts`：TAR 打包。
 - `src/parser.ts`、`src/main.ts`：Tampermonkey 的 GM 状态保存、页面导航及按钮界面。
 - `src/service/`：HTTP API、磁盘任务队列、接口采集任务、Cookie 会话。
 - `src/web/`：不依赖前端框架的提交、进度和下载页面。

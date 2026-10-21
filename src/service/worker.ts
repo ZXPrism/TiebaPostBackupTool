@@ -1,3 +1,5 @@
+import { create_viewer_html } from '../viewer';
+import { create_tar } from '../archive';
 import { mkdir, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { finalize_post } from '../shared/post';
@@ -102,11 +104,11 @@ export function create_runner(
             await progress({ stage: '打包文件' });
             const files: Record<string, string | Blob> = {
                 'post.json': JSON.stringify(post, null, 2),
-                'viewer.html': images.create_viewer_html(post),
+                'viewer.html': create_viewer_html(post),
                 'report.json': JSON.stringify({ backend: 'api', warnings, notes, floor_count: floors.length, image_count }, null, 2),
             };
             for (const [name, blob] of Object.entries(blobs)) { files[`images/${name}`] = blob; }
-            const archive = await images.create_tar(files);
+            const archive = await create_tar(files);
             signal.throwIfAborted();
             await writeFile(join(directory, 'backup.tar.tmp'), new Uint8Array(await archive.arrayBuffer()));
             await rename(join(directory, 'backup.tar.tmp'), join(directory, 'backup.tar'));

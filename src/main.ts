@@ -1,3 +1,5 @@
+import { create_viewer_html } from './viewer';
+import { create_tar } from './archive';
 import { Parser } from './parser';
 import { Post } from './types';
 
@@ -217,7 +219,7 @@ async function backup_post() {
         post.backup_date = new Date().toISOString();
 
         // Create viewer HTML
-        const viewer_html = image_handler.create_viewer_html(post);
+        const viewer_html = create_viewer_html(post);
 
         // Create JSON data
         const json_data = JSON.stringify(post, null, 2);
@@ -235,7 +237,7 @@ async function backup_post() {
             files[`images/${name}`] = blob;
         }
 
-        const tar_blob = await image_handler.create_tar(files);
+        const tar_blob = await create_tar(files);
 
         // Trigger download
         const filename = `${post.tieba_name}_${post.id}.tar`;
@@ -248,7 +250,7 @@ async function backup_post() {
         // Small delay before actual download
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        image_handler.download_blob(tar_blob, filename);
+        download_blob(tar_blob, filename);
 
         // Hide modal after download
         setTimeout(() => {
@@ -526,3 +528,17 @@ if (document.readyState === 'loading') {
 
 // Also make it available globally for console testing
 (window as unknown as { backup_post: typeof backup_post }).backup_post = backup_post;
+
+/**
+ * Download blob as file.
+ */
+function download_blob(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}

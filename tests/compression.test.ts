@@ -8,7 +8,7 @@ import { constants, gunzipSync, zstdDecompressSync } from 'node:zlib';
 import { compressed_file, negotiate_encoding } from '../src/service/compression';
 import { create_app } from '../src/service/http';
 import { JobQueue } from '../src/service/queue';
-import { ImageHandler } from '../src/image_handler';
+import { create_tar } from '../src/archive';
 
 const decode = (encoding: string, bytes: Buffer) => encoding === 'gzip' ? gunzipSync(bytes)
     : zstdDecompressSync(bytes, { params: { [constants.ZSTD_d_windowLogMax]: 23 } });
@@ -77,7 +77,7 @@ test('cancelled compression publishes no cache and can be retried', async () => 
 test('download routes send cached encoded bytes while preserving filenames and content types', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tieba-compression-http-'));
     const json = JSON.stringify({ text: '测试内容'.repeat(10000) });
-    const archive = Buffer.from(await (await new ImageHandler().create_tar({ 'post.json': json })).arrayBuffer());
+    const archive = Buffer.from(await (await create_tar({ 'post.json': json })).arrayBuffer());
     const queue = new JobQueue(root, async (_job, directory) => {
         await writeFile(join(directory, 'post.json'), json);
         await writeFile(join(directory, 'backup.tar'), archive);
