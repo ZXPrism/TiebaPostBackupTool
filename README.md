@@ -12,7 +12,7 @@ npm install
 TIEBA_COOKIE='BDUSS=你的登录凭据' npm start
 ```
 
-环境变量优先；未设置时读取已有的 `.data/session.json`。该文件为包含 `name`、`value`、`expires` 的 Cookie 数组，`expires` 为 Unix 秒或 `-1`（会话 Cookie）。不要将登录凭据提交到仓库。
+服务只从 `TIEBA_COOKIE` 环境变量读取登录凭据，未设置或无效时无法备份。不会读取会话文件。不要将登录凭据提交到仓库。
 
 网页中输入贴子链接或 ID 查询已有备份，再点击按钮开始新的备份。TAR 包含 `post.json`、`viewer.html`、`images/` 和 `report.json`，解压后打开 `viewer.html` 离线阅读。
 

@@ -767,26 +767,18 @@ test('native HTTP backend backs up fixtures and scopes the environment cookie', 
     }
 });
 
-test('independent session preserves expiry, rejects invalid environment overrides and is owner-readable only', async () => {
-    const { save_session, load_cookie } = await import('../src/service/session');
-    const { stat } = await import('node:fs/promises');
-    const root = await mkdtemp(join(tmpdir(), 'tieba-session-'));
-    const path = join(root, 'session.json');
+test('session only accepts a valid TIEBA_COOKIE environment variable', async () => {
+    const { load_cookie } = await import('../src/service/session');
     const previous = process.env.TIEBA_COOKIE;
-    delete process.env.TIEBA_COOKIE;
     try {
-        await assert.rejects(load_cookie(path), /TIEBA_COOKIE/);
-        await save_session([{ name: 'BDUSS', value: 'synthetic', expires: -1 },
-            { name: 'expired', value: 'old', expires: 1 }], path);
-        assert.equal(await load_cookie(path), 'BDUSS=synthetic');
-        assert.equal((await stat(path)).mode & 0o777, 0o600);
-        process.env.TIEBA_COOKIE = 'BDUSS=override';
-        assert.equal(await load_cookie(path), 'BDUSS=override');
-        process.env.TIEBA_COOKIE = '';
-        await assert.rejects(load_cookie(path), /Cookie 无效/);
         delete process.env.TIEBA_COOKIE;
-        await save_session([{ name: 'BDUSS', value: 'expired', expires: 1 }], path);
-        await assert.rejects(load_cookie(path), /BDUSS/);
+        await assert.rejects(load_cookie(), /未设置 TIEBA_COOKIE/);
+        process.env.TIEBA_COOKIE = 'BDUSS=synthetic; BAIDUID=synthetic-id';
+        assert.equal(await load_cookie(), process.env.TIEBA_COOKIE);
+        for (const value of ['', 'BAIDUID=only', 'BDUSS=', 'BDUSS=value\nInjected=header', 'BDUSS=中文']) {
+            process.env.TIEBA_COOKIE = value;
+            await assert.rejects(load_cookie(), /Cookie 无效/);
+        }
     } finally {
         if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
     }
