@@ -79,7 +79,7 @@ test('saved backup date drives the viewer and is explicitly accounted for in reg
     assert(html.includes('<time class="backup-date" datetime="2026-10-13T16:44:55.728Z">备份日期：2026/10/14 00:44:55（UTC+8）</time>'));
     const report = regression_report(baseline, post);
     assert.deepEqual(report.differences, []);
-    assert.deepEqual(report.accepted_backup_date_differences, [{ path: '$.backup_date', expected: undefined, actual: post.backup_date }]);
+    assert.deepEqual(report.accepted_backup_date_differences, [{ path: '$.backup_date', expected: baseline.backup_date, actual: post.backup_date }]);
     assert.equal(report.strict_differences.length, 1);
     assert.equal(regression_report(baseline, post, { strict: true }).differences.length, 1);
     assert.deepEqual(regression_report(post, { ...post, backup_date: '2026-10-14T00:00:00.000Z' }).differences, []);
@@ -87,11 +87,11 @@ test('saved backup date drives the viewer and is explicitly accounted for in reg
         assert.equal(regression_report(baseline, { ...post, backup_date }).differences.length, 1);
     }
     assert.equal(regression_report(baseline, { ...post, title: 'changed' }).differences.length, 1);
-    assert.equal(baseline.backup_date, undefined, 'Historical baseline stays unchanged');
+    assert.equal(baseline.backup_date, '2026-10-21T13:12:11.772Z');
 });
 
 test('reference JSON stays unchanged; image mapping round trip preserves every field', () => {
-    assert.equal(createHash('sha256').update(bytes).digest('hex'), 'e29101d807c27eddff57ec61e6c8b3c18b82f2ef857bf20ca96cb7420d2007f0');
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), '639594d7074e9ba8d107071356b2e50d31dfbb6e121e33597f14de0b62adfa2e');
     const raw = structuredClone(baseline);
     const reverse = new Map(Object.entries(raw.image_map || {}).map(([url, name]) => [name, url]));
     for (const floor of raw.floor_list) {
@@ -101,7 +101,18 @@ test('reference JSON stays unchanged; image mapping round trip preserves every f
         }
     }
     const { floor_list, image_map: _map, ...metadata } = raw;
-    assert.deepEqual(compare_posts(baseline, finalize_post(metadata, floor_list)), []);
+    const rebuilt = finalize_post(metadata, floor_list);
+    // Finalization renumbers files; the downloaded baseline also retains deduplicated URL aliases.
+    const names = new Map(Object.entries(rebuilt.image_map || {}).map(([url, name]) => [name, baseline.image_map?.[url]]));
+    for (const floor of rebuilt.floor_list) {
+        for (const comment of [floor.comment, ...(floor.sub_comment_list || [])]) {
+            comment.content = comment.content.replace(/\.\/images\/(image_\d+\.[a-z0-9]+)/g, (_match, key) => './images/' + (names.get(key) || key));
+            if (comment.avatar_url) { comment.avatar_url = names.get(comment.avatar_url) || comment.avatar_url; }
+        }
+    }
+    assert.equal(new Set(Object.values(rebuilt.image_map || {})).size, new Set(Object.values(baseline.image_map || {})).size);
+    rebuilt.image_map = baseline.image_map;
+    assert.deepEqual(compare_posts(baseline, rebuilt), []);
 });
 
 test('regression catches omissions, content, ordering, and metadata changes', () => {

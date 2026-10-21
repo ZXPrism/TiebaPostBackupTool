@@ -45,10 +45,9 @@ test('recorded API responses: cursor pages, nested pages, complete content and s
     assert.equal(result.floors.find(f => f.index === 21)?.sub_comment_list?.length, 18);
     const actual = finalize_post(result.metadata, result.floors);
     const report = regression_report(baseline, actual);
-    assert.equal(report.strict_differences.length, 76);
-    assert.equal(report.differences.length, 75, 'Unapproved differences must not disappear');
-    assert.equal(report.accepted_space_differences.length, 1);
-    assert.equal(report.accepted_space_differences[0].path, '$.floor_list[18].sub_comment_list[16].content');
+    assert.equal(report.strict_differences.length, 75);
+    assert.equal(report.differences.length, 74, 'Keep historical API fixture and downloaded-image mapping differences visible');
+    assert.equal(report.accepted_space_differences.length, 0);
     for (let i = 0; i < actual.floor_list.length; i++) {
         const left = baseline.floor_list[i], right = actual.floor_list[i];
         assert.equal(left.comment.date, right.comment.date);
@@ -57,6 +56,7 @@ test('recorded API responses: cursor pages, nested pages, complete content and s
     }
     assert.equal(Object.keys(actual.image_map || {}).length, 24);
     assert.equal(result.warnings.length, 0);
+    assert.equal(actual.comment_cnt, baseline.comment_cnt);
 });
 
 test('collection progress counts completed pages and all nested replies across floors', async () => {
@@ -113,7 +113,7 @@ test('space rule is narrow, auditable and reversible with strict mode', () => {
     const actual = structuredClone(baseline);
     const comment = actual.floor_list[18].sub_comment_list?.[16];
     assert(comment);
-    comment.content = comment.content.replace('嗯   数据', '嗯 数据');
+    comment.content = comment.content.replace('嗯 数据', '嗯   数据');
     assert.equal(regression_report(baseline, actual).differences.length, 0);
     assert.equal(regression_report(baseline, actual).strict_differences.length, 1);
     assert.equal(regression_report(baseline, actual, { strict: true }).differences.length, 1);
@@ -811,5 +811,59 @@ test('native transport passes cancellation, refuses automatic redirects and sani
         await session.close();
     } finally {
         if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
+    }
+});
+
+test('ordinary API images preserve line boundaries without changing explicit breaks or inline emoji', () => {
+    const picture = { type: 3, origin_src: 'https://imgsrc.baidu.com/a.jpg', bsize: '10,20' };
+    const text = (text: string) => ({ type: 0, text });
+    const image = render_api_content([picture]);
+    assert.equal(render_api_content([text('before'), picture, text('after')]), `before<br>${image}<br>after`);
+    assert.equal(render_api_content([text('before\n'), picture, text('\nafter')]), `before<br>${image}<br>after`);
+    assert.equal(render_api_content([text('before\n\n'), picture, text('\n\nafter')]), `before<br><br>${image}<br><br>after`);
+    assert.equal(render_api_content([picture, text(''), picture]), `${image}<br>${image}`);
+    const emoji = { type: 2, text: 'image_emoticon1' };
+    assert.equal(render_api_content([text('before'), emoji, text('after')]), `before${render_api_content([emoji])}after`);
+});
+
+test('recorded image paragraphs match baseline line boundaries and preserve full author names', async () => {
+    const result = await collect_api(baseline.id, replay().request, progress, signal);
+    const layout = (html: string) => html.replace(/<img\b[^>]*>/g, '[image]').replace(/<a\b[^>]*>(.*?)<\/a>/g, '$1');
+    for (const index of [2, 8, 9, 10, 12, 14, 22, 26]) {
+        const actual = result.floors.find(floor => floor.index === index);
+        const expected = baseline.floor_list.find(floor => floor.index === index);
+        assert(actual && expected);
+        assert.equal(layout(actual.comment.content), layout(expected.comment.content), `Floor ${index} line breaks`);
+    }
+    assert.equal(result.floors.find(floor => floor.index === 20)?.comment.author, '化妆师♤º');
+    assert.equal(result.floors.find(floor => floor.index === 26)?.comment.author, '叫我Cc就好🌱');
+});
+
+test('API reply count excludes the opening post just like the website, including empty threads', async () => {
+    for (const [count, expected] of [[68, 67], [1, 0], [0, 0]]) {
+        const records = structuredClone(fixtures);
+        (records[0].response.thread as Record<string, unknown>).reply_num = count;
+        const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+        assert.equal(result.metadata.comment_cnt, expected);
+    }
+});
+
+test('main floors and nested replies both prefer display names and fall back to account names', async () => {
+    for (const display of ['统一昵称🌱', '', undefined]) {
+        const records = structuredClone(fixtures);
+        const replace_names = (value: unknown): void => {
+            if (!value || typeof value !== 'object') { return; }
+            const record = value as Record<string, unknown>;
+            if (typeof record.portrait === 'string' && record.id !== undefined) {
+                record.name = 'account_name';
+                record.name_show = display;
+            }
+            for (const item of Object.values(record)) { replace_names(item); }
+        };
+        replace_names(records);
+        const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+        const comments = result.floors.flatMap(floor => [floor.comment, ...(floor.sub_comment_list ?? [])]);
+        assert.equal(comments.length, 64);
+        assert(comments.every(comment => comment.author === (display || 'account_name')));
     }
 });

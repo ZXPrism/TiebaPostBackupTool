@@ -60,7 +60,8 @@ function emoticon_url(name: string): string {
 
 /** Render supported structured content. Unknown types fail rather than disappearing from a backup. */
 export function render_api_content(value: unknown, note?: (message: string) => void): string {
-    return array(value, 'content').map((value, index) => {
+    const items = array(value, 'content');
+    const parts = items.map((value, index) => {
         const item = object(value, `content[${index}]`);
         const type = integer(item.type, 'content.type');
         switch (type) {
@@ -89,7 +90,20 @@ export function render_api_content(value: unknown, note?: (message: string) => v
             case 4: return `<a href="https://tieba.baidu.com/home/main?id=${encodeURIComponent(text(item.portrait, 'content.portrait'))}" class="at">${escape(text(item.text, 'content.text'))}</a>`;
             default: throw new Error(`尚未支持的接口正文类型: type=${type}，已停止采集以避免丢失内容`);
         }
-    }).join('');
+    });
+    let html = '';
+    let previous_image = false;
+    for (let index = 0; index < parts.length; index++) {
+        const part = parts[index];
+        if (!part) { continue; }
+        const image = integer(object(items[index], 'content').type, 'content.type') === 3;
+        // Ordinary pictures occupy their own line on Tieba. Emoji remain inline.
+        // The structured API omits these layout breaks; preserve explicit breaks without doubling them.
+        if (html && (image || previous_image) && !html.endsWith('<br>') && !part.startsWith('<br>')) { html += '<br>'; }
+        html += part;
+        previous_image = image;
+    }
+    return html;
 }
 
 function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: boolean, note: (message: string) => void): Comment {
@@ -104,7 +118,7 @@ function comment(raw: RecordValue, users: Map<number, RecordValue>, nested: bool
     const content = render_api_content(raw.content, note);
     const reply = content.match(/回复\s+<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>\s*:/);
     return {
-        author: text(nested ? user.name || user.name_show : user.name_show || user.name, 'user.name'),
+        author: text(user.name_show || user.name, 'user.name_show/name'),
         date: `${day} ${date.slice(11, 16)}`, content,
         ...(!nested && user.ip_address ? { ip_location: text(user.ip_address, 'user.ip_address') } : {}),
         avatar_url: `https://gss0.bdstatic.com/6LZ1dD3d1sgCo2Kml5_Y_D3/sys/portrait/item/${portrait}`,
@@ -161,7 +175,8 @@ export async function collect_api(
             metadata = {
                 id: post_id, title: text(thread.title, 'thread.title'), tieba_name: `${name}吧`,
                 tieba_url: `https://tieba.baidu.com/f?kw=${encodeURIComponent(name)}&ie=utf-8`,
-                page_cnt: total, comment_cnt: reply_count,
+                // Tieba's PC reply header subtracts the opening post from thread.reply_num.
+                page_cnt: total, comment_cnt: Math.max(0, reply_count - 1),
             };
         }
         const posts = array(result.post_list, 'post_list').map(value => object(value, 'post'));
