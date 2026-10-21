@@ -21,7 +21,7 @@ const baseline = JSON.parse(bytes.toString()) as Post;
 test('phase time estimates survive serialization and include stalls, retries and changing totals', () => {
     const job: Job = { id: 'timing', post_id: 123, url: 'https://tieba.baidu.com/p/123', status: 'running',
         created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString(), progress: { stage: '排队中' }, warnings: [] };
-    const pages = (current: number, total = 100) => ({ stage: '采集帖子',
+    const pages = (current: number, total = 100) => ({ stage: '采集贴子',
         collection: { pages: { current, total, complete: false } } });
     // Time spent queued or starting a browser is not counted as processing time.
     record_progress(job, pages(0), 60000);
@@ -160,7 +160,7 @@ test('user URL validation and downloaded resource allowlist', () => {
         'https://example.com/?url=https://tieba.baidu.com/p/123', 'https://tieba.baidu.com/p/9007199254740992?pn=2']) {
         assert.throws(() => parse_post_url(url));
     }
-    assert.throws(() => parse_post_url('not a URL'), /请输入贴吧帖子链接或帖子 ID/);
+    assert.throws(() => parse_post_url('not a URL'), /请输入贴吧贴子链接或贴子 ID/);
     assert(allowed_url('https://tiebapic.baidu.com/a.jpg'));
     for (const url of ['http://127.0.0.1/a', 'http://baidu.com.evil.test/a', 'https://baidu.com:3000/a', 'data:image/svg+xml,test']) {
         assert(!allowed_url(url));

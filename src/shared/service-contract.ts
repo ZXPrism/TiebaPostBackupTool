@@ -26,6 +26,7 @@ export interface PostBackups {
     backups: BackupSummary[];
     active?: ActiveBackup;
     last_attempt_failed: boolean;
+    failure_reason?: 'post_unavailable';
 }
 
 export interface Snapshot {

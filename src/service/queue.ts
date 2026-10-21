@@ -1,3 +1,4 @@
+import { PostUnavailableError } from './api';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -135,6 +136,7 @@ export class JobQueue {
             } catch (error) {
                 job.status = 'failed';
                 job.error = error instanceof Error ? error.message : String(error);
+                job.failure_reason = error instanceof PostUnavailableError ? 'post_unavailable' : undefined;
                 job.progress = { stage: '备份失败' };
                 await this.log('error', 'failed', error, job.id);
             } finally {

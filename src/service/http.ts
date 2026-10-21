@@ -15,12 +15,16 @@ function post_backups(queue: JobQueue, post: { id: number; url: string }): PostB
     const jobs = queue.list().filter(job => job.post_id === post.id);
     const active = jobs.find(job => job.status === 'queued' || job.status === 'running');
     const backups = jobs.filter(job => job.status === 'complete' || job.status === 'partial').map(job => ({
-        id: job.id, title: job.title || `帖子 ${post.id}`, backup_date: job.backup_date || job.updated_at,
+        id: job.id, title: job.title || `贴子 ${post.id}`, backup_date: job.backup_date || job.updated_at,
         filename: job.filename || 'backup.tar', floor_count: job.floor_count, image_count: job.image_count,
         partial: job.status === 'partial',
     })).sort((a, b) => b.backup_date.localeCompare(a.backup_date));
-    return { post_id: post.id, url: post.url, backups, active: active ? active_backup(active) : undefined,
-        last_attempt_failed: !active && jobs[0]?.status === 'failed' };
+    const status = active ? active_backup(active) : undefined;
+    const checking = status?.phase === 'floors' && !status.progress?.current;
+    const previous = !active ? jobs[0] : checking ? jobs.find(job => job !== active) : undefined;
+    return { post_id: post.id, url: post.url, backups, active: status,
+        last_attempt_failed: previous?.status === 'failed',
+        failure_reason: previous?.status === 'failed' ? previous.failure_reason : undefined };
 }
 
 function json(response: ServerResponse, status: number, data: unknown): void {

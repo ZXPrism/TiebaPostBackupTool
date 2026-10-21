@@ -11,16 +11,17 @@
     <main>
         <header><span class="eyebrow">Tieba Post Backup Tool</span><h1>百度贴吧贴子备份工具</h1></header>
         <section class="panel" aria-labelledby="form-title">
-            <h2 id="form-title">查找帖子备份</h2>
+            <h2 id="form-title">查找贴子备份</h2>
             <form id="backup-form">
-                <label for="post-url">帖子链接或 ID</label>
+                <label for="post-url">贴子链接或 ID</label>
                 <div class="input-row"><input id="post-url" name="url" placeholder="https://tieba.baidu.com/p/…" required autocomplete="off"><button id="submit" type="submit">查询备份 <span aria-hidden="true">→</span></button></div>
             </form>
             <p id="message" role="status" aria-live="polite"></p>
         </section>
         <section id="results" aria-labelledby="results-title" hidden>
             <div class="section-heading"><h2 id="results-title"></h2><span id="connection"></span></div>
-            <div class="backup-action"><button id="start-backup" type="button">开始备份</button><p id="last-failure" class="hint" hidden>上次未能生成备份，可以重新开始。</p></div>
+            <section id="last-failure" class="panel" role="status" hidden><h3>备份失败</h3><p id="failure-message"></p></section>
+            <div class="backup-action"><button id="start-backup" type="button">开始备份</button></div>
             <div id="active-backup" class="panel" role="status" hidden></div>
             <h3 class="backups-heading">已有备份</h3>
             <div id="backups"></div>

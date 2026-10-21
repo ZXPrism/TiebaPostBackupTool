@@ -150,15 +150,15 @@ export async function collect_api(
     });
     for (let number = 1; number <= max_pages; number++) {
         signal.throwIfAborted();
-        if (number === 1) { await report({ stage: '采集帖子', current: 0 }); }
+        if (number === 1) { await report({ stage: '采集贴子', current: 0 }); }
         const result = object(await request('/c/f/pb/page_pc', {
             kz: String(post_id), ...(last_pid ? { last_pid: String(last_pid) } : { pn: '1' }),
             lz: '0', r: '0', mark_type: '0', back: '0', fr: '', session_request_times: '1',
         }), 'page_pc');
         const thread = object(result.thread, 'thread');
         const page = object(result.page, 'page');
-        if (integer(thread.id, 'thread.id', 1) !== post_id) { throw new Error('接口返回的帖子 ID 不匹配'); }
-        if (flag(thread.is_partial_visible, 'thread.is_partial_visible')) { throw new Error('接口标记帖子仅部分内容可见，无法完整备份'); }
+        if (integer(thread.id, 'thread.id', 1) !== post_id) { throw new Error('接口返回的贴子 ID 不匹配'); }
+        if (flag(thread.is_partial_visible, 'thread.is_partial_visible')) { throw new Error('接口标记贴子仅部分内容可见，无法完整备份'); }
         if (flag(result.has_fold_comment, 'has_fold_comment')) { throw new Error('接口标记存在折叠内容，当前采集器无法保证完整备份'); }
         for (const value of array(result.user_list, 'user_list')) {
             const user = object(value, 'user');
@@ -210,7 +210,7 @@ export async function collect_api(
         }
         finished = !flag(page.has_more, 'page.has_more');
         collection.pages = { current: number, total: finished ? number : Math.max(total, number + 1), complete: finished };
-        await report({ stage: '采集帖子', current: number, total: collection.pages.total });
+        await report({ stage: '采集贴子', current: number, total: collection.pages.total });
         if (finished) { break; }
         if (!posts.length) { throw new Error('接口声明还有下一页，但当前楼层列表为空'); }
         if (raw_floors.length === previous_count) { throw new Error('接口楼层分页游标未前进'); }

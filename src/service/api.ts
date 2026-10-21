@@ -37,6 +37,8 @@ export function sign_form(parameters: Record<string, string>): Record<string, st
     return { ...form, sign: createHash('md5').update(signature).digest('hex') };
 }
 
+export class PostUnavailableError extends Error {}
+
 class RetryableApiError extends Error {
     constructor(message: string, readonly retry_after_ms = 0) { super(message); }
 }
@@ -78,7 +80,9 @@ export function create_api_request(context: HttpClient, post_url: string, pacer:
             const result = value as Record<string, unknown>;
             if (result.error_code === undefined) { throw new Error(`${path}: 响应缺少 error_code`); }
             if (result.error_code !== 0 && result.error_code !== '0') {
-                throw new Error(`${path}: error_code=${String(result.error_code)}${typeof result.error_msg === 'string' ? `，${result.error_msg}` : ''}`);
+                const message = `${path}: error_code=${String(result.error_code)}${typeof result.error_msg === 'string' ? `，${result.error_msg}` : ''}`;
+                if (path === '/c/f/pb/page_pc' && String(result.error_code) === '4') { throw new PostUnavailableError(message); }
+                throw new Error(message);
             }
             return result.data ?? result;
         } finally { await response.dispose(); }

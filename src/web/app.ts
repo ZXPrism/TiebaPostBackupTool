@@ -15,6 +15,8 @@ let generation = 0;
 let read_version = 0;
 let starting = false;
 let last_backups = '';
+let submitted_here = false;
+let show_failure = false;
 
 function notify(text: string, error = false): void {
     message.textContent = text;
@@ -44,6 +46,8 @@ function reset_selection(): void {
     selected = undefined;
     starting = false;
     last_backups = '';
+    submitted_here = false;
+    show_failure = false;
     element('results').hidden = true;
     render_active();
     notify('');
@@ -78,6 +82,7 @@ start.addEventListener('click', () => {
     void api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: post.url }) })
         .then(async () => {
             if (token !== generation) { return; }
+            submitted_here = true;
             notify('已提交。关闭页面后，可重新输入原链接查询。');
             await query(post.url, token);
         }).catch(error => { if (token === generation) { notify(error.message, true); } })
@@ -112,8 +117,15 @@ function render_active(active?: ActiveBackup): void {
         progress_view = undefined;
         return;
     }
+    // No progress bars until the first page has actually been collected.
+    if (active.phase === 'floors' && !active.progress?.current) {
+        container.replaceChildren(node('h3', active.status === 'queued' ? '已进入队列，等待备份' : '正在检查贴子…'));
+        progress_view = undefined;
+        return;
+    }
     // Keep the same elements between polls so the fill can transition from its current position.
     if (!progress_view) {
+        container.replaceChildren();
         const heading = node('h3');
         container.append(heading, node('p', '关闭页面不会中断备份，稍后输入同一链接即可继续查看进度。', 'hint'));
         const bars = ['总进度', '当前阶段'].map(text => {
@@ -137,7 +149,7 @@ function render_active(active?: ActiveBackup): void {
         progress_view = { heading, bars, estimate };
     }
     progress_view.heading.textContent = active.status === 'queued' ? '已进入队列，等待备份'
-        : { floors: '正在采集帖子', replies: '正在采集楼中楼', images: '正在保存图片', packaging: '正在整理备份' }[active.phase];
+        : { floors: '正在采集贴子', replies: '正在采集楼中楼', images: '正在保存图片', packaging: '正在整理备份' }[active.phase];
     const bars = progress_view.bars;
     const update = (index: number, count?: ProgressCount) => {
         const { bar, fill } = bars[index];
@@ -209,11 +221,17 @@ function preview(backup: BackupSummary): HTMLDetailsElement {
 
 function render(result: PostBackups): void {
     element('results').hidden = false;
-    element('results-title').textContent = `帖子 ${result.post_id}`;
+    element('results-title').textContent = `贴子 ${result.post_id}`;
     start.hidden = Boolean(result.active);
     start.disabled = starting;
-    element('last-failure').hidden = !result.last_attempt_failed;
-    render_active(result.active);
+    if (!result.active) { show_failure = submitted_here && result.last_attempt_failed; }
+    else if (!result.last_attempt_failed) { show_failure = false; }
+    element('last-failure').hidden = !show_failure;
+    element('failure-message').textContent = result.failure_reason === 'post_unavailable'
+        ? '贴子无法访问，可能已被删除。请检查贴子链接或 ID。'
+        : '未能完成备份，未生成新的备份结果。';
+    if (show_failure) { notify(''); }
+    render_active(show_failure ? undefined : result.active);
     const encoded = JSON.stringify(result.backups);
     if (encoded === last_backups) { return; }
     last_backups = encoded;

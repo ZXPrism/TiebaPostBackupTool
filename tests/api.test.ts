@@ -15,6 +15,7 @@ import { JobQueue } from '../src/service/queue';
 import { config } from '../src/service/config';
 import type { Post } from '../src/types';
 import type { Progress } from '../src/shared/progress';
+import type { PostBackups } from '../src/shared/service-contract';
 
 const fixtures = JSON.parse(await readFile('tests/regression/api-responses.json', 'utf8')) as {
     path: string; parameters: Record<string, string>; response: Record<string, unknown>;
@@ -866,5 +867,78 @@ test('main floors and nested replies both prefer display names and fall back to 
         const comments = result.floors.flatMap(floor => [floor.comment, ...(floor.sub_comment_list ?? [])]);
         assert.equal(comments.length, 64);
         assert(comments.every(comment => comment.author === (display || 'account_name')));
+    }
+});
+
+test('unavailable post failure survives reload and stays distinct from generic failures in public queries', async () => {
+    const { create_app } = await import('../src/service/http');
+    const root = await mkdtemp(join(tmpdir(), 'tieba-unavailable-'));
+    let requests = 0;
+    const context: HttpClient = { get: async () => { throw new Error('Unexpected GET'); }, post: async () => {
+        requests++;
+        return { status: () => 200, text: async () => '{"error_code":4,"error_msg":"贴子可能已被删除"}',
+            dispose: async () => undefined } as HttpResponse;
+    } } as HttpClient;
+    let queue = new JobQueue(root, async () => {
+        await create_api_request(context, 'https://tieba.baidu.com/p/1234', new RequestPacer(0), signal)('/c/f/pb/page_pc', { kz: '1234' });
+        throw new Error('Expected unavailable post');
+    });
+    await queue.initialize();
+    const job = await queue.submit('1234');
+    const deadline = Date.now() + 3000;
+    while (job.status !== 'failed' && Date.now() < deadline) { await new Promise(resolve => setTimeout(resolve, 10)); }
+    await queue.close();
+    assert.equal(job.status, 'failed');
+    assert.equal(job.failure_reason, 'post_unavailable');
+    assert.equal(requests, 1);
+    let advance: ((value: Progress) => Promise<void>) | undefined;
+    let release = () => undefined as void;
+    queue = new JobQueue(root, async (job, _directory, progress) => {
+        if (job.post_id === 1234) {
+            advance = progress;
+            await new Promise<void>(resolve => { release = resolve; });
+        }
+        throw new Error('private transport diagnostics');
+    });
+    await queue.initialize();
+    const server = create_app(queue);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address !== 'string');
+    try {
+        for (const url of ['1234', 'https://tieba.baidu.com/p/1234?foo=bar']) {
+            const response: Response = await fetch(`http://127.0.0.1:${address.port}/api/posts?url=${encodeURIComponent(url)}`);
+            const data: PostBackups = await response.json();
+            assert.equal(data.last_attempt_failed, true);
+            assert.equal(data.failure_reason, 'post_unavailable');
+            assert.equal(data.active, undefined);
+            assert.deepEqual(data.backups, []);
+            assert(!JSON.stringify(data).includes('error_code'));
+        }
+        const other = await queue.submit('5678');
+        const deadline = Date.now() + 3000;
+        while (other.status !== 'failed' && Date.now() < deadline) { await new Promise(resolve => setTimeout(resolve, 10)); }
+        const data = await (await fetch(`http://127.0.0.1:${address.port}/api/posts?url=5678`)).json();
+        assert.equal(data.last_attempt_failed, true);
+        assert.equal(data.failure_reason, undefined);
+        assert(!JSON.stringify(data).includes('private'));
+        await queue.submit('1234');
+        const retry_deadline = Date.now() + 3000;
+        while (!advance && Date.now() < retry_deadline) { await new Promise(resolve => setTimeout(resolve, 10)); }
+        assert(advance);
+        const checking = await (await fetch(`http://127.0.0.1:${address.port}/api/posts?url=1234`)).json();
+        assert.equal(checking.active.status, 'running');
+        assert.equal(checking.last_attempt_failed, true, 'Retain the previous failure during validation');
+        assert.equal(checking.failure_reason, 'post_unavailable');
+        await advance({ stage: '采集贴子', collection: { pages: { current: 1, total: 2, complete: false } } });
+        const collecting = await (await fetch(`http://127.0.0.1:${address.port}/api/posts?url=1234`)).json();
+        assert.equal(collecting.last_attempt_failed, false);
+        assert.equal(collecting.failure_reason, undefined);
+        assert.equal(collecting.active.progress.current, 1);
+    } finally {
+        release();
+        await queue.close();
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
     }
 });

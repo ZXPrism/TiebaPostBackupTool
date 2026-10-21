@@ -66,3 +66,7 @@ summary:hover { color: #161616; }
     .panel, .job { padding: 20px; }
     .input-row { flex-direction: column; }
 }
+
+#last-failure { margin-bottom: 20px; }
+#last-failure h3 { margin: 0 0 10px; font-size: 16px; }
+#last-failure p { margin: 0; line-height: 1.7; }
