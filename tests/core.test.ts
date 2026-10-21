@@ -277,3 +277,34 @@ test('queue serializes jobs, deduplicates pending posts, persists and recovers i
     assert.equal(restored.get(second.id)?.status, 'complete');
     await restored.close();
 });
+
+test('URL time rule accepts only observed numeric avatar/profile timestamps and remains auditable', () => {
+    const changed = JSON.parse(JSON.stringify(baseline).replace(/([?&]t=)\d+/g, '$19999999999')) as Post;
+    for (const normalize_images of [false, true]) {
+        const report = regression_report(baseline, changed, { normalize_images });
+        assert.deepEqual(report.differences, []);
+        assert(report.accepted_url_time_differences.length > 0);
+        assert(regression_report(baseline, changed, { normalize_images, strict: true }).differences.length > 0);
+    }
+    const original = baseline.floor_list[0].comment.homepage_url;
+    assert(original);
+    for (const url of [original.replace('fr=pb', 'fr=other'), original.replace('tb.1.', 'tb.2.'),
+        original.replace(/t=\d+/, 't=invalid'), original.replace(/\?t=\d+/, ''), original + '#changed']) {
+        const actual = structuredClone(baseline);
+        actual.floor_list[0].comment.homepage_url = url;
+        assert.equal(regression_report(baseline, actual).differences.length, 1);
+    }
+    for (const url of ['https://example.com/avatar?t=1', 'https://tieba.baidu.com/p/123?t=1']) {
+        const expected = structuredClone(baseline), actual = structuredClone(baseline);
+        expected.floor_list[0].comment.homepage_url = url;
+        actual.floor_list[0].comment.homepage_url = url.replace('t=1', 't=2');
+        assert.equal(regression_report(expected, actual).differences.length, 1);
+    }
+    const actual = structuredClone(changed);
+    const key = Object.keys(actual.image_map || {}).find(url => url.includes('?t='));
+    assert(key && actual.image_map);
+    actual.image_map[key] = 'different.jpg';
+    assert(regression_report(baseline, actual).differences.length > 0);
+    actual.floor_list[0].comment.content += ' t=9999999999';
+    assert(regression_report(baseline, actual).differences.some(diff => diff.path.endsWith('.content')));
+});

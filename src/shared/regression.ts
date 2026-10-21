@@ -8,6 +8,7 @@ export interface RegressionReport {
     strict_differences: Difference[];
     accepted_space_differences: Difference[];
     accepted_backup_date_differences: Difference[];
+    accepted_url_time_differences: Difference[];
 }
 
 /** Only collapse consecutive ASCII spaces in ordinary text, never HTML attributes or preformatted text. */
@@ -32,7 +33,37 @@ export function normalize_content_spaces(content: string): string {
     return result + (stack.length ? rest : rest.replace(/ {2,}/g, ' '));
 }
 
-/** Export dates and approved spaces are accepted only here; strict comparison remains available. */
+/** Limit the rule to the observed Baidu avatar and profile endpoints and numeric t values. */
+function normalize_url_time(value: string): string {
+    if (!/^https:\/\/(?:gss0\.bdstatic\.com\/6LZ1dD3d1sgCo2Kml5_Y_D3\/sys\/portrait\/item\/[^?#]+|tieba\.baidu\.com\/home\/main)\?/.test(value)) { return value; }
+    return value.replace(/([?&]t=)\d+(?=&|$)/g, '$1<TIME>');
+}
+
+function normalize_avatar_time(value: string): string {
+    if (!value.startsWith('image-sources:')) { return normalize_url_time(value); }
+    try {
+        const urls: unknown = JSON.parse(decodeURIComponent(value.slice('image-sources:'.length)));
+        if (!Array.isArray(urls) || urls.some(url => typeof url !== 'string')) { return value; }
+        return 'image-sources:' + JSON.stringify(urls.map(normalize_url_time).sort());
+    } catch { return value; }
+}
+
+function is_url_time_difference(diff: Difference, expected: Post, actual: Post): boolean {
+    if (/^\$\.floor_list\[\d+\]\.(?:comment|sub_comment_list\[\d+\])\.(?:avatar_url|homepage_url)$/.test(diff.path)
+        || /^\$\.image_map\[\d+\]$/.test(diff.path)) {
+        return typeof diff.expected === 'string' && typeof diff.actual === 'string'
+            && normalize_avatar_time(diff.expected) === normalize_avatar_time(diff.actual);
+    }
+    if (!diff.path.startsWith('$.image_map.')) { return false; }
+    const url = diff.path.slice('$.image_map.'.length);
+    const normalized = normalize_url_time(url);
+    if (normalized === url) { return false; }
+    const other = diff.actual === undefined ? actual.image_map : diff.expected === undefined ? expected.image_map : undefined;
+    const filename = diff.actual === undefined ? diff.expected : diff.actual;
+    return Object.entries(other || {}).some(([key, value]) => value === filename && normalize_url_time(key) === normalized);
+}
+
+/** Approved export dates, spaces and URL timestamps remain auditable; strict comparison is available. */
 export function regression_report(expected: Post, actual: Post, options: RegressionOptions = {}): RegressionReport {
     const strict_differences = compare_posts(expected, actual);
     const comparison = options.normalize_images ? compare_posts(expected, actual, true) : strict_differences;
@@ -45,8 +76,9 @@ export function regression_report(expected: Post, actual: Post, options: Regress
         && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value);
     const accepted_backup_date_differences = options.strict ? [] : comparison.filter(difference =>
         difference.path === '$.backup_date' && valid_date(difference.expected) && valid_date(difference.actual));
-    const accepted = new Set([...accepted_space_differences, ...accepted_backup_date_differences]);
-    return { strict_differences, accepted_space_differences, accepted_backup_date_differences,
+    const accepted_url_time_differences = options.strict ? [] : comparison.filter(diff => is_url_time_difference(diff, expected, actual));
+    const accepted = new Set([...accepted_space_differences, ...accepted_backup_date_differences, ...accepted_url_time_differences]);
+    return { strict_differences, accepted_space_differences, accepted_backup_date_differences, accepted_url_time_differences,
         differences: comparison.filter(diff => !accepted.has(diff)) };
 }
 

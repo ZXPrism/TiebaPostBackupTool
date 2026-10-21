@@ -40,6 +40,7 @@ try {
     await writeFile(join(directory, 'regression.json'), JSON.stringify(report, null, 2));
     console.log(`严格差异 ${report.strict_differences.length} 处；接受正文连续空格差异 ${report.accepted_space_differences.length} 处`);
     console.log(`接受备份时间差异 ${report.accepted_backup_date_differences.length} 处（详见 regression.json）`);
+    console.log(`接受 URL 时间参数差异 ${report.accepted_url_time_differences.length} 处（详见 regression.json）`);
     console.log(`采集结果与差异报告: ${directory}`);
     if (differences.length || result.warnings.length) {
         console.error(`回归未通过: ${differences.length} 处 JSON 差异，${result.warnings.length} 项采集警告`);

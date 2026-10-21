@@ -46,7 +46,8 @@ test('recorded API responses: cursor pages, nested pages, complete content and s
     const actual = finalize_post(result.metadata, result.floors);
     const report = regression_report(baseline, actual);
     assert.equal(report.strict_differences.length, 75);
-    assert.equal(report.differences.length, 74, 'Keep historical API fixture and downloaded-image mapping differences visible');
+    assert.equal(report.differences.length, 32, 'Keep historical API fixture and downloaded-image mapping differences visible');
+    assert.equal(report.accepted_url_time_differences.length, 42);
     assert.equal(report.accepted_space_differences.length, 0);
     for (let i = 0; i < actual.floor_list.length; i++) {
         const left = baseline.floor_list[i], right = actual.floor_list[i];
