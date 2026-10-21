@@ -251,7 +251,7 @@ export class ImageHandler {
      * Create viewer HTML file.
      */
     public create_viewer_html(post: Post, backup_date = new Date(post.backup_date ?? Date.now())): string {
-        const json_data = JSON.stringify(post, null, 2).replace(/</g, '\\u003c');
+        const json_data = JSON.stringify({ floor_list: post.floor_list }).replace(/</g, '\\u003c');
         const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char);
         const post_url = `https://tieba.baidu.com/p/${post.id}`;
         const formatted_date = backup_date.toLocaleString('zh-CN', {
@@ -297,6 +297,11 @@ export class ImageHandler {
             margin-bottom: 10px;
             overflow-wrap: anywhere;
         }
+        .pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+        .pagination button, .pagination input { padding: 6px 10px; border: 1px solid #bbb; border-radius: 3px; background: white; color: #222; }
+        .pagination button:disabled { color: #999; }
+        .pagination input { width: 65px; }
+        .pagination label { font-size: 14px; color: #666; }
         .floor {
             background: white;
             padding: 15px;
@@ -410,7 +415,19 @@ export class ImageHandler {
             回复: ${post.comment_cnt}
         </div>
     </div>
+    <nav class="pagination" aria-label="顶部翻页">
+        <button type="button" data-step="-1">上一页</button>
+        <span class="page-status" aria-live="polite"></span>
+        <button type="button" data-step="1">下一页</button>
+        <label>跳至第 <input class="page-number" type="number" min="1" value="1" aria-label="页码"> 页</label>
+        <button type="button" data-jump>跳转</button>
+    </nav>
     <div id="content"></div>
+    <nav class="pagination" aria-label="底部翻页">
+        <button type="button" data-step="-1">上一页</button>
+        <span class="page-status" aria-live="polite"></span>
+        <button type="button" data-step="1">下一页</button>
+    </nav>
 
     <script>
         try {
@@ -447,6 +464,10 @@ export class ImageHandler {
                         if (!src.startsWith('./images/') || src.includes('..', 2)) { el.removeAttribute('src'); }
                     }
                 });
+                template.content.querySelectorAll('img').forEach(img => {
+                    img.setAttribute('loading', 'lazy');
+                    img.setAttribute('decoding', 'async');
+                });
                 return template.innerHTML;
             }
 
@@ -459,7 +480,7 @@ export class ImageHandler {
             // Author with avatar
             html += '<div class="author-line">';
             if (floor.comment.avatar_url) {
-                html += '<img class="avatar" src="./images/' + escapeText(floor.comment.avatar_url) + '" alt="">';
+                html += '<img class="avatar" loading="lazy" decoding="async" width="50" height="50" src="./images/' + escapeText(floor.comment.avatar_url) + '" alt="">';
             }
             // Author as link if homepage exists
             if (floor.comment.homepage_url) {
@@ -494,7 +515,7 @@ export class ImageHandler {
 
             // Avatar
             if (comment.avatar_url) {
-                html += '<img class="sub-avatar" src="./images/' + escapeText(comment.avatar_url) + '" alt="">';
+                html += '<img class="sub-avatar" loading="lazy" decoding="async" width="30" height="30" src="./images/' + escapeText(comment.avatar_url) + '" alt="">';
             }
 
             // Debug logging
@@ -543,17 +564,38 @@ export class ImageHandler {
             return html;
         }
 
-        // Render all floors
         const contentDiv = document.getElementById('content');
-        if (!contentDiv) {
-        } else {
-            post.floor_list.forEach((floor, index) => {
-                try {
-                    contentDiv.insertAdjacentHTML('beforeend', renderFloor(floor));
-                } catch (e) {
-                }
+        const pageSize = 30;
+        const pageCount = Math.max(1, Math.ceil(post.floor_list.length / pageSize));
+        let page = 0;
+        function renderPage(nextPage, scroll = true) {
+            page = Math.max(0, Math.min(pageCount - 1, nextPage));
+            const floors = post.floor_list.slice(page * pageSize, (page + 1) * pageSize);
+            contentDiv.innerHTML = floors.map(renderFloor).join('');
+            const range = floors.length ? ' · ' + floors[0].index + '–' + floors[floors.length - 1].index + ' 楼' : '';
+            document.querySelectorAll('.page-status').forEach(el => {
+                el.textContent = (page + 1) + ' / ' + pageCount + ' 页' + range;
             });
+            document.querySelectorAll('[data-step]').forEach(button => {
+                button.disabled = Number(button.dataset.step) < 0 ? page === 0 : page === pageCount - 1;
+            });
+            const input = document.querySelector('.page-number');
+            input.max = String(pageCount);
+            input.value = String(page + 1);
+            if (scroll) { window.scrollTo({ top: 0, behavior: 'instant' }); }
         }
+        document.querySelectorAll('[data-step]').forEach(button => {
+            button.addEventListener('click', () => renderPage(page + Number(button.dataset.step)));
+        });
+        function jump() {
+            const value = Number(document.querySelector('.page-number').value);
+            if (Number.isInteger(value) && value >= 1 && value <= pageCount) { renderPage(value - 1); }
+        }
+        document.querySelector('[data-jump]').addEventListener('click', jump);
+        document.querySelector('.page-number').addEventListener('keydown', event => {
+            if (event.key === 'Enter') { jump(); }
+        });
+        renderPage(0, false);
         } catch (error) {
             document.getElementById('content').innerHTML = '<p style="color: red; padding: 20px;">Error rendering post: ' + escapeText(error.message) + '</p>';
         }
