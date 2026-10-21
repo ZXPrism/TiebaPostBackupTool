@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { APIRequestContext } from 'playwright';
+import type { HttpClient } from './transport';
 import type { ApiRequest } from '../shared/api-collector';
 import type { Log } from './logging';
 
@@ -47,18 +47,18 @@ function retry_after(value: string | undefined): number {
     return Number.isFinite(milliseconds) ? Math.max(0, milliseconds) : 0;
 }
 
-export function create_api_request(context: APIRequestContext, post_url: string, pacer: RequestPacer, signal: AbortSignal, log?: Log): ApiRequest {
+export function create_api_request(context: HttpClient, post_url: string, pacer: RequestPacer, signal: AbortSignal, log?: Log): ApiRequest {
     const attempt: ApiRequest = async (path, parameters) => {
         const transport_error = (error: unknown): never => {
             signal.throwIfAborted();
-            // Avoid Playwright's request log, which may include headers/session data.
-            const detail = error instanceof Error ? error.message.split('\n')[0].replace(/^apiRequestContext\.(post|text): /, '') : '未知传输错误';
+            // Keep transport diagnostics concise; never include request headers.
+            const detail = error instanceof Error ? error.message.split('\n')[0] : '未知传输错误';
             throw new RetryableApiError(`${path}: 请求失败，${detail}`);
         };
         const response = await context.post(`https://tieba.baidu.com${path}`, {
             form: sign_form(parameters),
             headers: { Referer: post_url, 'X-Requested-With': 'XMLHttpRequest' },
-            timeout: 30000, maxRedirects: 0, maxRetries: 0,
+            timeout: 30000,
         }).catch(transport_error);
         try {
             signal.throwIfAborted();
@@ -86,7 +86,7 @@ export function create_api_request(context: APIRequestContext, post_url: string,
     return async (path, parameters) => {
         for (let retries = 0; ; retries++) {
             try {
-                // Every attempt uses the shared pacer; Playwright's own retries stay disabled.
+                // Every attempt uses the shared pacer; the transport does not retry.
                 return await pacer.run(async () => {
                     // Start the request immediately at the paced boundary; disk writes must not shift it.
                     const [result] = await Promise.all([

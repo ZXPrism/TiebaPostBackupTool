@@ -4,70 +4,26 @@ import { mkdtemp, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, type Browser, type BrowserContext } from 'playwright';
+import { build } from 'tsup';
+import type { PageParser } from '../src/shared/page-parser';
 import { ImageHandler } from '../src/image_handler';
-import { compare_posts } from '../src/shared/regression';
 import type { Post } from '../src/types';
-import { create_runner } from '../src/service/worker';
 import { JobQueue } from '../src/service/queue';
 import { create_app } from '../src/service/http';
-import { prepare_post_page } from '../src/service/page-readiness';
 import { collect_api } from '../src/shared/api-collector';
 import { finalize_post } from '../src/shared/post';
 import type { Progress } from '../src/shared/progress';
 
+declare global { interface Window { TiebaPage: { PageParser: typeof PageParser } } }
 let browser: Browser;
-before(async () => { browser = await chromium.launch({ headless: true, executablePath: process.env.TEST_CHROMIUM_EXECUTABLE_PATH }); });
-after(async () => { await browser?.close(); });
-
-test('service prepares legacy pages automatically and reports concrete HTTP/DOM failures', async () => {
-    const page = await browser.newPage();
-    let body = '<div class="pc-pb-title"><span class="pb-title">测试帖</span></div>';
-    let status = 200;
-    let switch_calls = 0;
-    let switch_error = 0;
-    try {
-        await page.route('**/*', route => {
-            if (new URL(route.request().url()).pathname === '/c/s/pc/updateSwitch') {
-                switch_calls++;
-                if (!switch_error) { body = '<div class="core_title_txt">旧版标题</div><div class="l_post l_post_bright">楼层</div>'; }
-                return route.fulfill({ json: { error_code: switch_error } });
-            }
-            return route.fulfill({ status, contentType: 'text/html', body });
-        });
-        let response = await page.goto('https://tieba.baidu.com/p/1');
-        await page.addScriptTag({ path: 'dist/service/page.js' });
-        const plugin_error = await page.evaluate(() => {
-            try { new window.TiebaPage.PageParser().metadata(); return ''; }
-            catch (error) { return String(error); }
-        });
-        assert.match(plugin_error, /本插件仅支持旧版贴吧/);
-        await prepare_post_page(page, response, 100);
-        assert.equal(switch_calls, 1);
-        assert.equal(await page.locator('.core_title_txt').count(), 1);
-        await prepare_post_page(page, response, 100);
-        assert.equal(switch_calls, 1, 'Legacy page should not call the switch endpoint');
-        switch_error = 12;
-        body = '<div class="pc-pb-title"><span class="pb-title">测试帖</span></div>';
-        response = await page.goto('https://tieba.baidu.com/p/1');
-        await assert.rejects(prepare_post_page(page, response, 100), /error_code=12/);
-        status = 403;
-        body = 'Forbidden';
-        response = await page.goto('https://tieba.baidu.com/p/1');
-        await assert.rejects(prepare_post_page(page, response, 100), /HTTP 403/);
-        status = 200;
-        body = '<div class="core_title_txt">旧版标题</div>';
-        response = await page.goto('https://tieba.baidu.com/p/1');
-        await assert.rejects(prepare_post_page(page, response, 100), error => {
-            assert(error instanceof Error);
-            assert.match(error.message, /仍缺少 \.l_post\.l_post_bright/);
-            assert(!error.message.includes('仍缺少 .core_title_txt'));
-            return true;
-        });
-        body += '<div class="l_post l_post_bright">楼层</div>';
-        response = await page.goto('https://tieba.baidu.com/p/1');
-        await prepare_post_page(page, response, 100);
-    } finally { await page.close(); }
+let parser_bundle: string;
+before(async () => {
+    const outDir = await mkdtemp(join(tmpdir(), 'tieba-parser-'));
+    await build({ entry: ['src/shared/page-parser.ts'], outDir, format: ['iife'], globalName: 'TiebaPage', config: false, silent: true });
+    parser_bundle = join(outDir, 'page-parser.global.js');
+    browser = await chromium.launch({ headless: true, executablePath: process.env.TEST_CHROMIUM_EXECUTABLE_PATH });
 });
+after(async () => { await browser?.close(); });
 
 const post_id = 123456;
 const base = `https://tieba.baidu.com/p/${post_id}`;
@@ -116,7 +72,7 @@ function unpack(bytes: Uint8Array): Map<string, string> {
     return files;
 }
 
-test('userscript and headless worker produce identical JSON across pages and delayed sub-comments', { timeout: 60000 }, async () => {
+test('userscript backs up all pages and delayed sub-comments', { timeout: 60000 }, async () => {
     const context = await routed_context();
     try {
         await context.addInitScript({ content: `
@@ -158,35 +114,8 @@ test('userscript and headless worker produce identical JSON across pages and del
         assert.equal(JSON.parse(plugin_files.get('report.json') || '').image_count, 1);
         for (const [key, value] of Object.entries(metadata)) { assert.deepEqual(plugin_post[key as keyof Post], value); }
 
-        const root = await mkdtemp(join(tmpdir(), 'tieba-browser-'));
-        const queue = new JobQueue(root, create_runner(routed_context, async () => new Blob(['test-image'], { type: 'image/png' }), 'browser'));
-        await queue.initialize();
-        try {
-            const job = await queue.submit(base);
-            const deadline = Date.now() + 25000;
-            while (!['complete', 'partial', 'failed'].includes(job.status) && Date.now() < deadline) {
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
-            assert.equal(job.status, 'complete', job.error || 'Job did not complete');
-            assert.equal(job.image_count, 1);
-            const cloud_post = JSON.parse(await readFile(join(root, job.id, 'post.json'), 'utf8'));
-            assert(plugin_post.backup_date);
-            assert(cloud_post.backup_date);
-            for (const post of [plugin_post, cloud_post]) {
-                assert.equal(new Date(post.backup_date).toISOString(), post.backup_date);
-            }
-            assert.deepEqual(compare_posts({ ...plugin_post, backup_date: cloud_post.backup_date }, cloud_post), []);
-            const cloud_files = unpack(await readFile(join(root, job.id, 'backup.tar')));
-            assert.deepEqual(JSON.parse(cloud_files.get('post.json') || ''), cloud_post);
-            assert(!cloud_files.has('images/image_2.jpg'));
-            assert.equal(cloud_files.get('images/image_1.png'), plugin_files.get('images/image_1.png'));
-            // Each export has its own backup date; all other HTML must remain identical.
-            const without_date = (html: string) => html.replace(/<time class="backup-date" datetime="[^"]+">[^<]+<\/time>/, '<time>backup date</time>');
-            assert((cloud_files.get('viewer.html') || '').includes(`datetime="${cloud_post.backup_date}"`));
-            assert((plugin_files.get('viewer.html') || '').includes(`datetime="${plugin_post.backup_date}"`));
-            assert.equal(without_date(cloud_files.get('viewer.html') || ''),
-                without_date(plugin_files.get('viewer.html') || '').replaceAll(plugin_post.backup_date, cloud_post.backup_date));
-        } finally { await queue.close(); }
+        assert(plugin_post.backup_date);
+        assert((plugin_files.get('viewer.html') || '').includes(`datetime="${plugin_post.backup_date}"`));
     } finally { await context.close(); }
 });
 
@@ -195,7 +124,7 @@ test('stalled sub-comment pagination produces an explicit partial result', { tim
     try {
         const page = await context.newPage();
         await page.goto(base);
-        await page.addScriptTag({ path: 'dist/service/page.js' });
+        await page.addScriptTag({ path: parser_bundle });
         const result = await page.evaluate(async () => {
             const parser = new window.TiebaPage.PageParser();
             return { floors: await parser.parse_current_page(), warnings: parser.warnings };

@@ -9,7 +9,7 @@ import { collect_api, render_api_content, type ApiRequest } from '../src/shared/
 import { finalize_post } from '../src/shared/post';
 import { normalize_content_spaces, regression_report } from '../src/shared/regression';
 import { create_api_request, RequestPacer, sign_form } from '../src/service/api';
-import type { APIRequestContext, APIResponse, BrowserContext } from 'playwright';
+import type { HttpClient, HttpResponse, HttpSession } from '../src/service/transport';
 import { create_runner } from '../src/service/worker';
 import { JobQueue } from '../src/service/queue';
 import { config } from '../src/service/config';
@@ -373,9 +373,6 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
     const calls: string[] = [];
     let closed = 0;
     const context = {
-        route: async () => undefined, routeWebSocket: async () => undefined,
-        cookies: async () => [{ name: 'BDUSS', value: 'synthetic-session', expires: -1 }],
-        newPage: async () => assert.fail('API backend must not navigate a page'),
         close: async () => { closed++; },
         request: { post: async (url: string, options: { form: Record<string, string> }) => {
             const path = new URL(url).pathname;
@@ -384,9 +381,9 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
             calls.push(path);
             return { status: () => 200, text: async () => JSON.stringify(record.response), dispose: async () => undefined };
         } },
-    } as unknown as BrowserContext;
+    } as unknown as HttpSession;
     let image_count = 0, active_images = 0, peak_images = 0;
-    const download = async (_context: BrowserContext, _url: string, _post: string, before?: () => Promise<void>) => {
+    const download = async (_context: HttpSession, _url: string, _post: string, before?: () => Promise<void>) => {
         await before?.();
         image_count++;
         peak_images = Math.max(peak_images, ++active_images);
@@ -394,7 +391,7 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
         active_images--;
         return new Blob(['synthetic-image'], { type: 'image/png' });
     };
-    const queue = new JobQueue(root, create_runner(async () => context, download, 'api', new RequestPacer(0), new RequestPacer(1)));
+    const queue = new JobQueue(root, create_runner(download, new RequestPacer(0), new RequestPacer(1), async () => context));
     await queue.initialize();
     try {
         const job = await queue.submit(String(baseline.id));
@@ -446,9 +443,9 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
     } finally { await queue.close(); }
 
     let attempts = 0;
-    const runner = create_runner(async () => context, async (_context, _url, _post, before) => {
+    const runner = create_runner(async (_context, _url, _post, before) => {
         await before?.(); attempts++; throw new Error('HTTP 429');
-    }, 'api', new RequestPacer(0), new RequestPacer(5));
+    }, new RequestPacer(0), new RequestPacer(5), async () => context);
     await assert.rejects(runner(queue.list()[0], root, progress, signal), /HTTP 429/);
     assert.equal(attempts, 1, 'Stop further image requests after the first failure');
 });
@@ -460,16 +457,14 @@ test('verified unavailable original produces a complete job with a note in the a
     Object.assign(response.first_floor as object, { content, sub_post_number: 0, sub_post_list: { sub_post_list: [] } });
     response.post_list = [];
     const context = {
-        route: async () => undefined, routeWebSocket: async () => undefined,
-        cookies: async () => [{ name: 'BDUSS', value: 'synthetic-session', expires: -1 }],
         close: async () => undefined,
         request: { post: async () => ({ status: () => 200, text: async () => JSON.stringify(response), dispose: async () => undefined }) },
-    } as unknown as BrowserContext;
+    } as unknown as HttpSession;
     const root = await mkdtemp(join(tmpdir(), 'tieba-api-missing-original-'));
-    const queue = new JobQueue(root, create_runner(async () => context, async (_context, url) => {
+    const queue = new JobQueue(root, create_runner(async (_context, url) => {
         assert(!url.includes('shoubai_emoji_face_365'), 'Do not download a known missing original');
         return new Blob(['synthetic-avatar'], { type: 'image/png' });
-    }, 'api', new RequestPacer(0), new RequestPacer(0)));
+    }, new RequestPacer(0), new RequestPacer(0), async () => context));
     await queue.initialize();
     try {
         const job = await queue.submit(String(baseline.id));
@@ -510,14 +505,12 @@ test('API request signing and non-retryable response validation', async () => {
     ];
     for (const fixture of cases) {
         let requests = 0, disposed = 0;
-        const context = { post: async (url: string, options: { form: unknown; maxRedirects: number; maxRetries: number }) => {
+        const context = { post: async (url: string, options: { form: unknown }) => {
             requests++;
             assert.equal(url, 'https://tieba.baidu.com/c/f/pb/page_pc');
             assert.deepEqual(options.form, form);
-            assert.equal(options.maxRedirects, 0);
-            assert.equal(options.maxRetries, 0);
-            return { status: () => fixture.status, text: async () => fixture.body, dispose: async () => { disposed++; } } as APIResponse;
-        } } as APIRequestContext;
+            return { status: () => fixture.status, text: async () => fixture.body, dispose: async () => { disposed++; } } as HttpResponse;
+        } } as HttpClient;
         const result = create_api_request(context, 'https://tieba.baidu.com/p/123', new RequestPacer(0), signal)('/c/f/pb/page_pc', { kz: '123', pn: '1' });
         if (fixture.error) { await assert.rejects(result, fixture.error); }
         else { assert.deepEqual(await result, { post_list: [] }); }
@@ -534,16 +527,15 @@ test('API retries temporary failures at most three times through the shared requ
                 const starts: number[] = [];
                 const pacer = new RequestPacer(1500, () => now, async ms => { now += ms; });
                 const parameters = { thread_id: '123', post_id: '456', offset: '10' };
-                const context = { post: async (url: string, options: { form: unknown; maxRetries: number }) => {
+                const context = { post: async (url: string, options: { form: unknown }) => {
                     calls++;
                     starts.push(now);
                     now += 100;
                     assert.equal(url, `https://tieba.baidu.com${path}`);
                     assert.deepEqual(options.form, sign_form(parameters), 'Retry the same page/cursor');
-                    assert.equal(options.maxRetries, 0, 'No hidden retries outside the pacer');
                     const failing = !recover || calls < 4;
-                    if (failing && failure === 'timeout') { throw new Error('apiRequestContext.post: Timeout 30000ms exceeded\nCall log:\nCookie: private'); }
-                    if (failing && failure === 'connection') { throw new Error('apiRequestContext.post: ECONNRESET'); }
+                    if (failing && failure === 'timeout') { throw new Error('Timeout 30000ms exceeded\nCall log:\nCookie: private'); }
+                    if (failing && failure === 'connection') { throw new Error('ECONNRESET'); }
                     return {
                         status: () => failing && typeof failure === 'number' ? failure : 200,
                         headers: () => ({}),
@@ -552,8 +544,8 @@ test('API retries temporary failures at most three times through the shared requ
                             return '{"error_code":0,"data":{"post_list":[]}}';
                         },
                         dispose: async () => { disposed++; },
-                    } as unknown as APIResponse;
-                } } as unknown as APIRequestContext;
+                    } as unknown as HttpResponse;
+                } } as unknown as HttpClient;
                 const logs: { level: string; event: string; detail: unknown }[] = [];
                 const result = create_api_request(context, 'https://tieba.baidu.com/p/123', pacer, signal,
                     async (level, event, detail) => { logs.push({ level, event, detail }); })(path, parameters);
@@ -587,7 +579,7 @@ test('API stops retrying on a terminal response or cancellation during the inter
     const context = { post: async () => {
         calls++;
         return { status: () => calls === 1 ? 503 : 403, headers: () => ({}), dispose: async () => { disposed++; } };
-    } } as unknown as APIRequestContext;
+    } } as unknown as HttpClient;
     await assert.rejects(create_api_request(context, '', new RequestPacer(0), signal)('/c/f/pb/page_pc', {}), /HTTP 403/);
     assert.equal(calls, 2);
     assert.equal(disposed, 2);
@@ -607,7 +599,7 @@ test('API respects Retry-After and allows cancellation of server-requested waits
             status: () => starts.length === 1 ? 429 : 200,
             headers: () => ({ 'retry-after': '1' }), text: async () => '{"error_code":0}', dispose: async () => undefined,
         };
-    } } as unknown as APIRequestContext;
+    } } as unknown as HttpClient;
     await create_api_request(context, '', new RequestPacer(25), signal)('/c/f/pb/page_pc', {});
     assert.equal(starts.length, 2);
     assert(starts[1] - starts[0] >= 1000, 'Server wait also applies when it exceeds the collection interval');
@@ -620,7 +612,7 @@ test('API respects Retry-After and allows cancellation of server-requested waits
             calls++;
             timer = setTimeout(() => controller.abort(), 10);
             return { status: () => 503, headers: () => ({ 'retry-after': header }), dispose: async () => undefined };
-        } } as unknown as APIRequestContext;
+        } } as unknown as HttpClient;
         try {
             await assert.rejects(create_api_request(context, '', new RequestPacer(0), controller.signal)('/c/f/pb/page_pc', {}), /abort/i);
             assert.equal(calls, 1);
@@ -699,7 +691,7 @@ test('API startup configuration uses an hour budget and validates rate overrides
     const run = (overrides: Record<string, string>) => spawnSync(process.execPath, [
         '--import', 'tsx', '--input-type=module', '-e',
         "import { config } from './src/service/config.ts'; console.log(JSON.stringify(config));",
-    ], { encoding: 'utf8', env: { ...process.env, TIEBA_BACKEND: 'api', TIEBA_API_INTERVAL_MS: '1000', TIEBA_IMAGE_INTERVAL_MS: '200', ...overrides } });
+    ], { encoding: 'utf8', env: { ...process.env, TIEBA_API_INTERVAL_MS: '1000', TIEBA_IMAGE_INTERVAL_MS: '200', ...overrides } });
     const api = run({});
     assert.ifError(api.error);
     assert.equal(api.status, 0, api.stderr);
@@ -708,13 +700,116 @@ test('API startup configuration uses an hour budget and validates rate overrides
     assert.equal(selected.api_request_interval_ms, 1000);
     assert.equal(selected.image_request_interval_ms, 200);
     assert.equal(selected.max_api_pages, 2000);
-    const browser = run({ TIEBA_BACKEND: 'browser' });
-    assert.equal(JSON.parse(browser.stdout).job_timeout_ms, 1800000);
     const custom = run({ TIEBA_API_INTERVAL_MS: '1500', TIEBA_IMAGE_INTERVAL_MS: '300' });
     assert.equal(JSON.parse(custom.stdout).api_request_interval_ms, 1500);
     for (const value of ['0', '-1', '1.5', 'NaN', '']) {
         const invalid = run({ TIEBA_API_INTERVAL_MS: value });
         assert.notEqual(invalid.status, 0);
         assert.match(invalid.stderr, /TIEBA_API_INTERVAL_MS 必须为正整数/);
+    }
+});
+
+test('native HTTP backend backs up fixtures without Chromium and scopes the environment cookie', async () => {
+    const { open_http_session } = await import('../src/service/transport');
+    const { validate_cookie } = await import('../src/service/session');
+    const previous = process.env.TIEBA_COOKIE;
+    process.env.TIEBA_COOKIE = 'BDUSS=synthetic-secret; BAIDUID=synthetic-id';
+    const root = await mkdtemp(join(tmpdir(), 'tieba-native-'));
+    let content_requests = 0, image_requests = 0;
+    const send: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        const headers = new Headers(init?.headers);
+        assert.equal(init?.redirect, 'manual');
+        assert(init?.signal);
+        if (url.hostname === 'tieba.baidu.com') {
+            assert.equal(headers.get('cookie'), process.env.TIEBA_COOKIE);
+            const form = Object.fromEntries(new URLSearchParams(String(init?.body)));
+            assert(form.sign);
+            const record = fixtures.find(f => f.path === url.pathname && Object.entries(f.parameters).every(([k, v]) => form[k] === v));
+            assert(record);
+            content_requests++;
+            return Response.json(record.response);
+        }
+        assert.equal(headers.get('cookie'), null, 'Session must not leak to image CDNs');
+        image_requests++;
+        return new Response('synthetic-image', { headers: { 'content-type': 'image/png' } });
+    };
+    try {
+        assert.throws(() => validate_cookie('BDUSS=secret\r\nInjected: value'), /Cookie 无效/);
+        assert.throws(() => validate_cookie('BAIDUID=only'), /BDUSS/);
+        const runner = create_runner(undefined,
+            new RequestPacer(0), new RequestPacer(0), signal => open_http_session(signal, send));
+        const job = { id: 'native', post_id: baseline.id, url: `https://tieba.baidu.com/p/${baseline.id}`,
+            status: 'running' as const, created_at: '', updated_at: '', progress: { stage: '' }, warnings: [] };
+        await runner(job, root, progress, signal);
+        const post = JSON.parse(await readFile(join(root, 'post.json'), 'utf8')) as Post;
+        assert.equal(post.floor_list.length, 28);
+        const expected_collection = await collect_api(baseline.id, replay().request, progress, signal);
+        const { ImageHandler } = await import('../src/image_handler');
+        const images = new ImageHandler();
+        const expected = finalize_post(expected_collection.metadata, expected_collection.floors, images);
+        await images.deduplicate_images(expected, Object.fromEntries(Object.values(expected.image_map ?? {})
+            .map(name => [name, new Blob(['synthetic-image'], { type: 'image/png' })])));
+        assert.deepEqual({ ...post, backup_date: undefined }, { ...expected, backup_date: undefined },
+            'Switching the HTTP transport must preserve every collected field');
+        assert.equal(content_requests, 5);
+        assert.equal(image_requests, 24);
+        assert((await readFile(join(root, 'backup.tar'))).length > 0);
+        const session = await open_http_session(signal, send);
+        const response = await session.request.get('https://imgsrc.baidu.com/example.png', {});
+        assert.equal(response.ok(), true);
+        await response.dispose();
+        await session.close();
+    } finally {
+        if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
+    }
+});
+
+test('independent session preserves expiry, rejects invalid environment overrides and is owner-readable only', async () => {
+    const { save_session, load_cookie } = await import('../src/service/session');
+    const { stat } = await import('node:fs/promises');
+    const root = await mkdtemp(join(tmpdir(), 'tieba-session-'));
+    const path = join(root, 'session.json');
+    const previous = process.env.TIEBA_COOKIE;
+    delete process.env.TIEBA_COOKIE;
+    try {
+        await assert.rejects(load_cookie(path), /login:export/);
+        await save_session([{ name: 'BDUSS', value: 'synthetic', expires: -1 },
+            { name: 'expired', value: 'old', expires: 1 }], path);
+        assert.equal(await load_cookie(path), 'BDUSS=synthetic');
+        assert.equal((await stat(path)).mode & 0o777, 0o600);
+        process.env.TIEBA_COOKIE = 'BDUSS=override';
+        assert.equal(await load_cookie(path), 'BDUSS=override');
+        process.env.TIEBA_COOKIE = '';
+        await assert.rejects(load_cookie(path), /Cookie 无效/);
+        delete process.env.TIEBA_COOKIE;
+        await save_session([{ name: 'BDUSS', value: 'expired', expires: 1 }], path);
+        await assert.rejects(load_cookie(path), /BDUSS/);
+    } finally {
+        if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
+    }
+});
+
+test('native transport passes cancellation, refuses automatic redirects and sanitizes network failures', async () => {
+    const { open_http_session } = await import('../src/service/transport');
+    const previous = process.env.TIEBA_COOKIE;
+    process.env.TIEBA_COOKIE = 'BDUSS=synthetic-secret';
+    const controller = new AbortController();
+    try {
+        const session = await open_http_session(controller.signal, async (_url, options) => {
+            assert.equal(options?.redirect, 'manual');
+            options?.signal?.throwIfAborted();
+            throw new Error('Cookie: BDUSS=synthetic-secret', { cause: { code: 'ENOTFOUND' } });
+        });
+        await assert.rejects(session.request.post('https://tieba.baidu.com/c/f/pb/page_pc', {}), error => {
+            assert.match(String(error), /DNS 解析失败/);
+            assert(!String(error).includes('synthetic-secret'));
+            return true;
+        });
+        controller.abort(new Error('cancelled'));
+        await assert.rejects(session.request.get('https://tieba.baidu.com/image', {}), /cancelled/);
+        await session.close();
+    } finally {
+        if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
     }
 });

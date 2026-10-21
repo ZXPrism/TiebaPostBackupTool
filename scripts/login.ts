@@ -1,12 +1,14 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { readFile } from 'node:fs/promises';
-import { open_browser, has_session } from '../src/service/browser';
+import { save_session } from '../src/service/session';
+import { open_browser, has_session } from './login-browser';
 
+const exporting = process.argv[2] === '--export';
 const importing = process.argv[2] === '--import';
 const import_path = importing ? process.argv[3] : undefined;
 if (importing && !import_path) { throw new Error('用法: npm run login:import -- /path/to/cookies.json'); }
-const context = await open_browser(Boolean(import_path));
+const context = await open_browser(exporting || Boolean(import_path));
 try {
     if (import_path) {
         // Accept a Playwright storageState file or a JSON cookie array. Never log its contents.
@@ -27,7 +29,7 @@ try {
             };
         });
         await context.addCookies(normalized);
-    } else {
+    } else if (!exporting) {
         const page = context.pages()[0] || await context.newPage();
         await page.goto('https://tieba.baidu.com', { waitUntil: 'domcontentloaded' });
         const input = createInterface({ input: stdin, output: stdout });
@@ -35,5 +37,6 @@ try {
         finally { input.close(); }
     }
     if (!await has_session(context)) { throw new Error('未检测到有效的 BDUSS Cookie，登录状态未就绪'); }
-    console.log('登录 Cookie 已保存到专用浏览器配置目录。后续采集默认使用 headless 模式。');
+    await save_session(await context.cookies('https://tieba.baidu.com'));
+    console.log('登录会话已保存。API 后端使用独立会话文件，无需启动浏览器。');
 } finally { await context.close(); }

@@ -10,7 +10,7 @@ import { finalize_post } from '../src/shared/post';
 import { ImageHandler } from '../src/image_handler';
 import { parse_post_url, type Job } from '../src/service/model';
 import { active_backup, record_progress } from '../src/service/progress';
-import { allowed_url } from '../src/service/browser';
+import { allowed_url } from '../src/service/resource-url';
 import { JobQueue } from '../src/service/queue';
 
 const bytes = await readFile('tests/regression/post.json');

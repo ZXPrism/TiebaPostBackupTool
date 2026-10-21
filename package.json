@@ -14,6 +14,7 @@
     "build:all": "npm run build && npm run build:service",
     "start": "npm run build:service && node --import tsx src/service/server.ts",
     "login": "node --import tsx scripts/login.ts",
+    "login:export": "node --import tsx scripts/login.ts --export",
     "login:import": "node --import tsx scripts/login.ts --import",
     "regression": "node --import tsx scripts/compare.ts",
     "test": "npm run build:all && node --import tsx --test tests/core.test.ts tests/compression.test.ts tests/api.test.ts tests/browser.test.ts tests/server.test.ts",
@@ -30,9 +31,7 @@
     "tsup": "^8.3.5",
     "tsx": "^4.23.15",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.57.2"
-  },
-  "dependencies": {
+    "typescript-eslint": "^8.57.2",
     "playwright": "^1.64.0"
   },
   "engines": {

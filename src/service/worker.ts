@@ -1,22 +1,15 @@
 import { mkdir, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { BrowserContext, Page } from 'playwright';
-import type { Floor, Post } from '../types';
-import type { PageParser } from '../shared/page-parser';
 import { finalize_post } from '../shared/post';
 import { ImageHandler } from '../image_handler';
-import { allowed_url, has_session, open_browser, restrict_browser } from './browser';
-import { config, project_dir, type Backend } from './config';
+import { allowed_url } from './resource-url';
+import { config } from './config';
 import { collect_api } from '../shared/api-collector';
 import { create_api_request, RequestPacer } from './api';
 import type { Job, Progress } from './model';
-import { prepare_post_page } from './page-readiness';
 import { prepare_downloads } from './compression';
 import type { Log } from './logging';
-
-declare global {
-    interface Window { TiebaPage: { PageParser: typeof PageParser } }
-}
+import { open_http_session, type HttpSession } from './transport';
 
 export interface WorkerResult {
     title?: string;
@@ -29,13 +22,13 @@ export interface WorkerResult {
 
 export type Runner = (job: Job, directory: string, progress: (value: Progress) => Promise<void>, signal: AbortSignal, log?: Log) => Promise<WorkerResult>;
 
-async function fetch_image(context: BrowserContext, original: string, post_url: string, before_request?: () => Promise<void>): Promise<Blob> {
+async function fetch_image(context: HttpSession, original: string, post_url: string, before_request?: () => Promise<void>): Promise<Blob> {
     let url = new URL(original, post_url).href;
     for (let redirects = 0; redirects < 5; redirects++) {
         if (!allowed_url(url)) { throw new Error('图片地址不在允许的域名内'); }
         await before_request?.();
         const response = await context.request.get(url, {
-            timeout: 30000, maxRedirects: 0, maxRetries: 0, headers: { Referer: post_url },
+            timeout: 30000, headers: { Referer: post_url },
         });
         try {
             if ([301, 302, 303, 307, 308].includes(response.status())) {
@@ -56,87 +49,23 @@ async function fetch_image(context: BrowserContext, original: string, post_url: 
 }
 
 export function create_runner(
-    launch: () => Promise<BrowserContext> = open_browser,
     download: typeof fetch_image = fetch_image,
-    backend: Backend = config.backend,
     pacer = new RequestPacer(config.api_request_interval_ms),
     image_pacer = new RequestPacer(config.image_request_interval_ms),
+    http_session = open_http_session,
 ): Runner {
     return async (job, directory, progress, signal, log) => {
         signal.throwIfAborted();
-        const context = await launch();
+        const context = await http_session(signal);
         const abort = () => { void context.close().catch(() => undefined); };
         signal.addEventListener('abort', abort, { once: true });
-        let page: Page | undefined;
         try {
             signal.throwIfAborted();
-            await restrict_browser(context);
-            if (!await has_session(context)) {
-                throw new Error('未找到有效的 BDUSS 登录 Cookie。请先运行 npm run login 或 npm run login:import。');
-            }
-            let floors: Floor[] = [];
-            let warnings: string[] = [];
-            let notes: string[] = [];
-            let metadata: Omit<Post, 'floor_list' | 'image_map'> | undefined;
-            let total_pages = 1;
-            if (backend === 'api') {
-                const collection = await collect_api(job.post_id,
-                    create_api_request(context.request, job.url, pacer, signal, log), progress, signal, config.max_api_pages);
-                ({ floors, warnings, notes, metadata } = collection);
-                total_pages = metadata.page_cnt;
-            } else {
-                page = await context.newPage();
-                page.on('dialog', dialog => { void dialog.dismiss(); });
-                let reply_count = 0;
-                for (let number = 1; number <= total_pages; number++) {
-                    signal.throwIfAborted();
-                    await progress({ stage: '采集帖子', current: number, total: total_pages, collection: {
-                        pages: { current: number - 1, total: metadata ? total_pages : undefined, complete: false },
-                        replies: { current: reply_count, complete: false },
-                    } });
-                    const response = await page.goto(`${job.url}?pn=${number}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-                    await prepare_post_page(page, response);
-                    if (new URL(page.url()).pathname !== `/p/${job.post_id}`
-                        || Number(new URL(page.url()).searchParams.get('pn') || '1') !== number) {
-                        throw new Error(`第 ${number} 页地址不匹配：请求 ${job.url}?pn=${number}，实际 ${page.url()}`);
-                    }
-                    await page.addScriptTag({ path: join(project_dir, 'dist/service/page.js') });
-                    const result = await page.evaluate(async () => {
-                        const parser = new window.TiebaPage.PageParser();
-                        const floors = await parser.parse_current_page();
-                        return { metadata: parser.metadata(), floors, warnings: parser.warnings };
-                    });
-                    metadata = result.metadata;
-                    if (metadata.id !== job.post_id) { throw new Error('页面帖子 ID 不匹配'); }
-                    if (number === 1) {
-                        total_pages = metadata.page_cnt;
-                        if (!Number.isInteger(total_pages) || total_pages < 1 || total_pages > config.max_pages) {
-                            throw new Error(`页数无效或超过 ${config.max_pages} 页限制`);
-                        }
-                    } else if (metadata.page_cnt !== total_pages) {
-                        warnings.push(`第 ${number} 页显示的总页数发生变化，请重新备份确认内容`);
-                    }
-                    if (!result.floors.length) { throw new Error(`第 ${number} 页未解析到楼层`); }
-                    const seen = new Set(floors.map(floor => floor.index));
-                    if (result.floors.some(floor => seen.has(floor.index))) {
-                        throw new Error(`第 ${number} 页出现重复楼层，停止采集`);
-                    }
-                    floors.push(...result.floors);
-                    reply_count += result.floors.reduce((count, floor) => count + (floor.sub_comment_list?.length || 0), 0);
-                    warnings.push(...result.warnings.map(message => `第 ${number} 页: ${message}`));
-                    const complete = number === total_pages;
-                    await progress({ stage: '采集帖子', current: number, total: total_pages, collection: {
-                        pages: { current: number, total: total_pages, complete },
-                        replies: { current: reply_count, total: complete ? reply_count : undefined, complete },
-                    } });
-                    if (number < total_pages) { await page.waitForTimeout(1000); }
-                }
-            }
-            if (!metadata) { throw new Error('没有采集结果'); }
+            const { floors, warnings, notes, metadata } = await collect_api(job.post_id,
+                create_api_request(context.request, job.url, pacer, signal, log), progress, signal, config.max_api_pages);
             let image_error: unknown;
             const images = new ImageHandler(async url => {
                 signal.throwIfAborted();
-                if (backend !== 'api') { return download(context, url, job.url); }
                 try {
                     // ImageHandler caps in-flight downloads at five. Gate every start, including redirects.
                     return await download(context, url, job.url, () => image_pacer.run(async () => {
@@ -147,7 +76,7 @@ export function create_runner(
                     throw image_error;
                 }
             });
-            const post = finalize_post({ ...metadata, page_cnt: total_pages }, floors, images);
+            const post = finalize_post(metadata, floors, images);
             await mkdir(directory, { recursive: true });
             await writeFile(join(directory, 'post.json'), JSON.stringify(post, null, 2));
             const download_count = Object.keys(post.image_map || {}).length;
@@ -174,7 +103,7 @@ export function create_runner(
             const files: Record<string, string | Blob> = {
                 'post.json': JSON.stringify(post, null, 2),
                 'viewer.html': images.create_viewer_html(post),
-                'report.json': JSON.stringify({ backend, warnings, notes, floor_count: floors.length, image_count }, null, 2),
+                'report.json': JSON.stringify({ backend: 'api', warnings, notes, floor_count: floors.length, image_count }, null, 2),
             };
             for (const [name, blob] of Object.entries(blobs)) { files[`images/${name}`] = blob; }
             const archive = await images.create_tar(files);
@@ -189,9 +118,6 @@ export function create_runner(
                 floor_count: floors.length, image_count, warnings,
             };
         } catch (error) {
-            if (page && !page.isClosed()) {
-                await page.screenshot({ path: join(directory, 'failure.png'), timeout: 5000 }).catch(() => undefined);
-            }
             if (signal.aborted) { signal.throwIfAborted(); }
             throw error;
         } finally {
