@@ -57,7 +57,7 @@ async function query(value: string, token: number): Promise<void> {
     if (token !== generation || version !== read_version) { return; }
     selected = result;
     render(result);
-    element('connection').textContent = '自动更新';
+    element('connection').textContent = '';
 }
 
 form.addEventListener('submit', event => {
@@ -149,7 +149,7 @@ function render_active(active?: ActiveBackup): void {
         // Numeric and accessible progress remain exact; only the visual fill is animated.
         fill.style.transform = `scaleX(${Math.max(0, bar.position)})`;
     };
-    bars[0].detail.textContent = `${active.overall}% · 按阶段估算`;
+    bars[0].detail.textContent = `${active.overall}%`;
     update(0, { current: active.overall, total: 100, complete: false });
     const [label, unit] = { floors: ['楼层分页', '页'], replies: ['全帖楼中楼', '条'],
         images: ['保存图片', '张'], packaging: ['整理备份', ''] }[active.phase];
