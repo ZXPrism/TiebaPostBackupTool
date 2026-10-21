@@ -437,7 +437,7 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
         assert.equal(files.get('images/image_1.jpg'), 'synthetic-image');
         assert.equal(files.size, 4);
         for (const name of ['backup.tar', 'post.json']) {
-            for (const encoding of ['zstd', 'gzip']) {
+            for (const encoding of ['gzip']) {
                 assert((await readFile(join(root, job.id, `${name}.http.${encoding}`))).length > 0,
                     'Completed jobs already have transmission caches');
             }

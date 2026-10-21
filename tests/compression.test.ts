@@ -4,14 +4,11 @@ import { mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'node:fs/pro
 import { get, type IncomingHttpHeaders } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { constants, gunzipSync, zstdDecompressSync } from 'node:zlib';
+import { gunzipSync } from 'node:zlib';
 import { compressed_file, negotiate_encoding } from '../src/service/compression';
 import { create_app } from '../src/service/http';
 import { JobQueue } from '../src/service/queue';
 import { create_tar } from '../src/archive';
-
-const decode = (encoding: string, bytes: Buffer) => encoding === 'gzip' ? gunzipSync(bytes)
-    : zstdDecompressSync(bytes, { params: { [constants.ZSTD_d_windowLogMax]: 23 } });
 
 function raw(url: string, headers: Record<string, string> = {}, method = 'GET') {
     return new Promise<{ status: number | undefined; headers: IncomingHttpHeaders; bytes: Buffer }>((resolve, reject) => {
@@ -26,10 +23,10 @@ function raw(url: string, headers: Record<string, string> = {}, method = 'GET') 
 
 test('HTTP encoding negotiation respects quality, explicit refusals and identity', () => {
     for (const [header, expected] of [
-        [undefined, 'identity'], ['', 'identity'], ['br', 'identity'], ['gzip, deflate, br, zstd', 'zstd'],
-        ['zstd;q=0.5, gzip;q=1', 'gzip'], ['zstd;q=0, gzip', 'gzip'], ['gzip;q=0', 'identity'],
-        ['identity;q=1, gzip;q=0.5', 'identity'], ['*', 'zstd'], ['*;q=0', undefined],
-        ['*;q=0, gzip;q=0.2', 'gzip'], ['*;q=1, zstd;q=0', 'gzip'],
+        [undefined, 'identity'], ['', 'identity'], ['br', 'identity'], ['gzip, deflate, br', 'gzip'],
+        ['gzip;q=0', 'identity'],
+        ['identity;q=1, gzip;q=0.5', 'identity'], ['*', 'gzip'], ['*;q=0', undefined],
+        ['*;q=0, gzip;q=0.2', 'gzip'], ['*;q=1, br;q=0', 'gzip'],
         ['identity;q=0, br', undefined], ['GZIP; Q=1', 'gzip'], ['gzip;q=invalid', 'identity'],
     ]) { assert.equal(negotiate_encoding(header), expected, String(header)); }
 });
@@ -39,25 +36,25 @@ test('compression cache is lossless, shared, reusable and invalidated by source 
     const file = join(root, 'backup.tar');
     const original = Buffer.from('原始备份内容\n'.repeat(10000));
     await writeFile(file, original);
-    for (const encoding of ['zstd', 'gzip'] as const) {
+    for (const encoding of ['gzip'] as const) {
         const first = compressed_file(file, encoding);
         assert.equal(compressed_file(file, encoding), first, 'Concurrent downloads share one compressor');
         const cached = await first;
         const bytes = await readFile(cached);
         assert(bytes.length < original.length);
-        assert.deepEqual(decode(encoding, bytes), original);
+        assert.deepEqual(gunzipSync(bytes), original);
         const before = await stat(cached, { bigint: true });
         assert.equal(await compressed_file(file, encoding), cached);
         assert.equal((await stat(cached, { bigint: true })).mtimeNs, before.mtimeNs);
         await writeFile(cached, 'incomplete');
-        assert.deepEqual(decode(encoding, await readFile(await compressed_file(file, encoding))), original);
+        assert.deepEqual(gunzipSync(await readFile(await compressed_file(file, encoding))), original);
     }
     const old = await stat(file);
     const changed = Buffer.alloc(original.length, 65);
     await writeFile(file, changed);
     await utimes(file, old.atime, old.mtime);
-    for (const encoding of ['zstd', 'gzip'] as const) {
-        assert.deepEqual(decode(encoding, await readFile(await compressed_file(file, encoding))), changed);
+    for (const encoding of ['gzip'] as const) {
+        assert.deepEqual(gunzipSync(await readFile(await compressed_file(file, encoding))), changed);
     }
     assert(!(await readdir(root)).some(name => name.endsWith('.tmp')));
 });
@@ -98,7 +95,7 @@ test('download routes send cached encoded bytes while preserving filenames and c
         for (const endpoint of ['download', 'post.json']) {
             const url = `${origin}/api/jobs/${job.id}/${endpoint}`;
             const original = endpoint === 'download' ? archive : Buffer.from(json);
-            for (const encoding of ['zstd', 'gzip']) {
+            for (const encoding of ['gzip']) {
                 const headers = { 'Accept-Encoding': encoding };
                 const response = await raw(url, headers);
                 assert.equal(response.status, 200);
@@ -106,7 +103,7 @@ test('download routes send cached encoded bytes while preserving filenames and c
                 assert.equal(response.headers.vary, 'Accept-Encoding');
                 assert.equal(Number(response.headers['content-length']), response.bytes.length);
                 assert(response.bytes.length < original.length);
-                assert.deepEqual(decode(encoding, response.bytes), original);
+                assert.deepEqual(gunzipSync(response.bytes), original);
                 assert.equal(response.headers['content-type'], endpoint === 'download' ? 'application/x-tar' : 'application/json');
                 assert(response.headers['content-disposition']?.includes(`filename="${endpoint === 'download' ? 'backup.tar' : 'post.json'}"`));
                 const head = await raw(url, headers, 'HEAD');
@@ -115,14 +112,14 @@ test('download routes send cached encoded bytes while preserving filenames and c
                 assert.equal(head.bytes.length, 0);
                 assert.deepEqual((await raw(url, headers)).bytes, response.bytes);
             }
-            for (const headers of [{}, { 'Accept-Encoding': 'identity' }, { 'Accept-Encoding': 'gzip;q=0, zstd;q=0' }] as Record<string, string>[]) {
+            for (const headers of [{}, { 'Accept-Encoding': 'identity' }, { 'Accept-Encoding': 'gzip;q=0' }] as Record<string, string>[]) {
                 const response = await raw(url, headers);
                 assert.equal(response.headers['content-encoding'], undefined);
                 assert.deepEqual(response.bytes, original);
             }
             assert.equal((await raw(url, { 'Accept-Encoding': '*;q=0' })).status, 406);
         }
-        assert.equal((await raw(`${origin}/api/jobs/${job.id}/backup.tar.http.zstd`)).status, 404);
+        assert.equal((await raw(`${origin}/api/jobs/${job.id}/backup.tar.http.gzip`)).status, 404);
     } finally {
         await queue.close();
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

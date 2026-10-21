@@ -12,8 +12,8 @@ export interface BackupSummary {
 
 export interface ActiveBackup {
     status: 'queued' | 'running';
-    phase: 'floors' | 'replies' | 'images' | 'packaging';
-    /** Percentage estimated from four equally weighted phases, not elapsed time. */
+    phase: 'floors' | 'replies' | 'images' | 'packaging' | 'uploading';
+    /** Percentage estimated from collection, packaging and optional upload phases, not elapsed time. */
     overall: number;
     progress?: ProgressCount;
     /** Estimated seconds remaining in this phase only; absent until measurable. */

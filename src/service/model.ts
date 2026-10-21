@@ -5,6 +5,7 @@ export type { Progress } from '../shared/progress';
 export type JobStatus = 'queued' | 'running' | 'complete' | 'partial' | 'failed';
 
 export interface Job {
+    archive?: import('./storage').StoredArchive;
     id: string;
     post_id: number;
     url: string;

@@ -3,17 +3,17 @@ import type { Job, Progress } from './model';
 
 function describe_progress(value: Progress): Pick<ActiveBackup, 'phase' | 'progress' | 'overall'> {
     const collection = value.collection;
-    const phase = value.stage === '下载图片' ? 'images'
+    const phase = value.stage === '上传备份' ? 'uploading' : value.stage === '下载图片' ? 'images'
         : ['整理图片', '打包文件', '准备下载文件'].includes(value.stage) ? 'packaging'
         : collection?.pages.complete ? 'replies' : 'floors';
     const count = phase === 'floors' ? collection?.pages : phase === 'replies' ? collection?.replies
-        : phase === 'images' ? { current: value.current ?? 0, total: value.total,
+        : (phase === 'images' || phase === 'uploading') ? { current: value.current ?? 0, total: value.total,
             complete: value.total !== undefined && (value.current ?? 0) >= value.total } : undefined;
     const progress = count ? { current: count.current, total: count.total, complete: count.complete } : undefined;
     const fraction = !progress ? 0 : progress.complete ? 1
         : progress.total ? Math.min(1, Math.max(0, progress.current / progress.total)) : 0;
     // Phase weights describe progress, not duration. Preparing downloads has no measurable fraction.
-    const overall = Math.floor(({ floors: 0, replies: 25, images: 50, packaging: 75 }[phase]) + fraction * 25);
+    const overall = Math.min(99, Math.floor(({ floors: 0, replies: 25, images: 50, packaging: 75, uploading: 90 }[phase]) + fraction * (phase === 'uploading' ? 10 : 25)));
     return { phase, progress, overall };
 }
 

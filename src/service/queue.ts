@@ -7,6 +7,7 @@ import { parse_post_url, type Job, type Progress } from './model';
 import type { Runner } from './worker';
 import type { Post } from '../types';
 import { ServiceLogger, type LogLevel } from './logging';
+import { remove_local_archive, type ArchiveStore } from './storage';
 import { record_progress } from './progress';
 
 /** A single worker with durable job records. Interrupted jobs are never reported as complete. */
@@ -20,7 +21,7 @@ export class JobQueue {
 
     private readonly logger: ServiceLogger;
 
-    constructor(private readonly root: string, private readonly runner: Runner) {
+    constructor(private readonly root: string, private readonly runner: Runner, readonly storage?: ArchiveStore) {
         this.logger = new ServiceLogger(root);
     }
 
@@ -129,6 +130,17 @@ export class JobQueue {
                     await this.log('debug', 'progress', progress, job.id);
                 }, controller.signal, (level, event, detail) => this.log(level, event, detail, job.id));
                 controller.signal.throwIfAborted();
+                if (this.storage) {
+                    await this.log('info', 'archive_upload_started', {}, job.id);
+                    job.archive = await this.storage.publish(job.id, this.directory(job.id), result.filename, async progress => {
+                        record_progress(job, progress);
+                        job.updated_at = new Date().toISOString();
+                        await this.save(job);
+                        await this.log('debug', 'progress', progress, job.id);
+                    }, controller.signal);
+                    controller.signal.throwIfAborted();
+                    await this.log('info', 'archive_upload_verified', {}, job.id);
+                }
                 Object.assign(job, result);
                 job.status = result.warnings.length ? 'partial' : 'complete';
                 job.progress = { stage: job.status === 'partial' ? '部分完成' : '备份完成' };
@@ -144,6 +156,10 @@ export class JobQueue {
                 this.current = undefined;
                 job.updated_at = new Date().toISOString();
                 await this.save(job);
+                if (job.archive && ['complete', 'partial'].includes(job.status)) {
+                    try { await remove_local_archive(this.directory(job.id)); }
+                    catch (error) { await this.log('warn', 'local_archive_cleanup_failed', error, job.id); }
+                }
             }
         }
     }

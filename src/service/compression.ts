@@ -2,10 +2,10 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { constants, createGzip, createZstdCompress } from 'node:zlib';
+import { createGzip } from 'node:zlib';
 
-type Encoding = 'zstd' | 'gzip';
-type Representation = Encoding | 'identity';
+type Encoding = 'gzip';
+export type Representation = Encoding | 'identity';
 
 /** Prefer compression when identity has no explicit preference; never override q=0. */
 export function negotiate_encoding(header: string | undefined): Representation | undefined {
@@ -20,7 +20,7 @@ export function negotiate_encoding(header: string | undefined): Representation |
     }
     const quality = (encoding: Representation) => weights.get(encoding)
         ?? (encoding === 'identity' ? (weights.get('*') === 0 ? 0 : 0.001) : weights.get('*') ?? 0);
-    return (['zstd', 'gzip', 'identity'] as const).filter(encoding => quality(encoding) > 0)
+    return (['gzip', 'identity'] as const).filter(encoding => quality(encoding) > 0)
         .sort((a, b) => quality(b) - quality(a))[0];
 }
 
@@ -51,12 +51,7 @@ export function compressed_file(file: string, encoding: Encoding, signal?: Abort
             if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT') { throw error; }
         }
         try {
-            const compressor = encoding === 'gzip' ? createGzip({ level: 6 }) : createZstdCompress({ params: {
-                [constants.ZSTD_c_compressionLevel]: 9,
-                // RFC 9659: HTTP zstd frames must require at most an 8 MiB window.
-                [constants.ZSTD_c_windowLog]: 23,
-                [constants.ZSTD_c_checksumFlag]: 1,
-            } });
+            const compressor = createGzip({ level: 6 });
             await pipeline(createReadStream(file), compressor, createWriteStream(`${target}.tmp`), { signal });
             signal?.throwIfAborted();
             if (await fingerprint(file) !== source) { throw new Error('生成压缩缓存期间源文件发生变化，请重试下载'); }
@@ -74,8 +69,6 @@ export function compressed_file(file: string, encoding: Encoding, signal?: Abort
 export async function prepare_downloads(directory: string, signal?: AbortSignal): Promise<void> {
     // Bound compression memory: the single collection worker prepares these one at a time.
     for (const name of ['backup.tar', 'post.json']) {
-        for (const encoding of ['zstd', 'gzip'] as const) {
-            await compressed_file(join(directory, name), encoding, signal);
-        }
+        await compressed_file(join(directory, name), 'gzip', signal);
     }
 }

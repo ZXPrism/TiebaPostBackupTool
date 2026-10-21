@@ -4,10 +4,19 @@ import { config, data_dir, jobs_dir } from './config';
 import { JobQueue } from './queue';
 import { create_runner } from './worker';
 import { create_app } from './http';
+import { cos_config, CosArchiveStore } from './storage';
 import { load_cookie } from './session';
 
 await mkdir(data_dir, { recursive: true, mode: 0o700 });
-const queue = new JobQueue(jobs_dir, create_runner());
+let storage: CosArchiveStore | undefined;
+try {
+    const options = cos_config();
+    if (options) { storage = new CosArchiveStore(options); }
+} catch (error) {
+    console.error(`服务启动失败：${(error as Error).message}`);
+    process.exit(1);
+}
+const queue = new JobQueue(jobs_dir, create_runner(), storage);
 await queue.log('info', 'service_starting', { pid: process.pid, backend: 'api' });
 await queue.log('debug', 'service_configuration', config);
 try {

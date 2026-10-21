@@ -106,7 +106,7 @@ export function create_app(queue: JobQueue, base_path = config.base_path) {
                 }
                 return;
             }
-            const match = path.match(/^\/api\/jobs\/([a-f0-9-]{36})\/(download|post\.json|snapshot)$/);
+            const match = path.match(/^\/api\/jobs\/([a-f0-9-]{36})\/(download|download-url|post\.json|snapshot)$/);
             if (match && (request.method === 'GET' || request.method === 'HEAD')) {
                 const job = queue.get(match[1]);
                 if (!job) { json(response, 404, { error: '任务不存在' }); return; }
@@ -120,11 +120,26 @@ export function create_app(queue: JobQueue, base_path = config.base_path) {
                     })) };
                     json(response, 200, snapshot); return;
                 }
+                if (match[2] === 'download-url') {
+                    const encoding = negotiate_encoding(request.headers['accept-encoding']);
+                    if (!encoding) { json(response, 406, { error: '不支持请求指定的传输编码' }); return; }
+                    if (job.archive && !queue.storage) { json(response, 503, { error: '云存储未配置，暂时无法下载' }); return; }
+                    const target = job.archive && queue.storage
+                        ? await queue.storage.url(job.archive, encoding, 'GET')
+                        : `${base_path}/api/jobs/${job.id}/download`;
+                    json(response, 200, { url: target }); return;
+                }
                 const is_json = match[2] === 'post.json';
                 const file = join(queue.directory(job.id), is_json ? 'post.json' : 'backup.tar');
                 const encoding = negotiate_encoding(request.headers['accept-encoding']);
                 response.setHeader('Vary', 'Accept-Encoding');
-                if (!encoding) { json(response, 406, { error: '不支持请求指定的传输编码，可使用 zstd、gzip 或 identity' }); return; }
+                if (!encoding) { json(response, 406, { error: '不支持请求指定的传输编码，可使用 gzip 或 identity' }); return; }
+                if (!is_json && job.archive) {
+                    if (!queue.storage) { json(response, 503, { error: '云存储未配置，暂时无法下载' }); return; }
+                    const target = await queue.storage.url(job.archive, encoding, request.method as 'GET' | 'HEAD');
+                    response.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+                    response.end(); return;
+                }
                 const sent_file = encoding === 'identity' ? file : await compressed_file(file, encoding);
                 const info = await stat(sent_file);
                 if (encoding !== 'identity') { response.setHeader('Content-Encoding', encoding); }

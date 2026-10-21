@@ -92,15 +92,14 @@ start.addEventListener('click', () => {
 });
 
 async function download(backup: BackupSummary): Promise<void> {
-    const response = await api(`api/jobs/${backup.id}/download`);
-    const url = URL.createObjectURL(await response.blob());
+    const response = await api(`api/jobs/${backup.id}/download-url`);
+    const { url } = await response.json() as { url: string };
     const link = document.createElement('a');
     link.href = url;
     link.download = backup.filename;
     document.body.append(link);
     link.click();
     link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
 let progress_view: {
@@ -149,7 +148,7 @@ function render_active(active?: ActiveBackup): void {
         progress_view = { heading, bars, estimate };
     }
     progress_view.heading.textContent = active.status === 'queued' ? '已进入队列，等待备份'
-        : { floors: '正在采集贴子', replies: '正在采集楼中楼', images: '正在保存图片', packaging: '正在整理备份' }[active.phase];
+        : { floors: '正在采集贴子', replies: '正在采集楼中楼', images: '正在保存图片', packaging: '正在整理备份', uploading: '正在上传备份' }[active.phase];
     const bars = progress_view.bars;
     const update = (index: number, count?: ProgressCount) => {
         const { bar, fill } = bars[index];
@@ -164,13 +163,15 @@ function render_active(active?: ActiveBackup): void {
     bars[0].detail.textContent = `${active.overall}%`;
     update(0, { current: active.overall, total: 100, complete: false });
     const [label, unit] = { floors: ['楼层分页', '页'], replies: ['全帖楼中楼', '条'],
-        images: ['保存图片', '张'], packaging: ['整理备份', ''] }[active.phase];
+        images: ['保存图片', '张'], packaging: ['整理备份', ''], uploading: ['上传备份', '字节'] }[active.phase];
     bars[1].label.textContent = label;
     bars[1].bar.setAttribute('aria-label', label);
     const count = active.progress;
     bars[1].detail.textContent = active.status === 'queued' ? '等待采集'
-        : !count ? '处理中…' : count.total === undefined ? `已处理 ${count.current} ${unit}，总量待确认`
-        : `${count.current} / ${count.complete || active.phase === 'images' ? '' : '约 '}${count.total} ${unit}${count.complete ? ' · 已完成' : ''}`;
+        : !count ? '处理中…' : active.phase === 'uploading' && count.total !== undefined
+        ? `${(count.current / 1048576).toFixed(1)} / ${(count.total / 1048576).toFixed(1)} MB${count.complete ? ' · 已完成' : ''}`
+        : count.total === undefined ? `已处理 ${count.current} ${unit}，总量待确认`
+        : `${count.current} / ${count.complete || ['images', 'uploading'].includes(active.phase) ? '' : '约 '}${count.total} ${unit}${count.complete ? ' · 已完成' : ''}`;
     update(1, active.status === 'queued' ? { current: 0, total: 1, complete: false } : count);
     const seconds = active.remaining_seconds;
     const minutes = Math.ceil((seconds ?? 0) / 60);

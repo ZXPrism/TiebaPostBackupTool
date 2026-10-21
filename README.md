@@ -52,6 +52,16 @@ TIEBA_DATA_DIR=/srv/tieba-backups npm start
 
 打开网页，输入贴子链接或 ID 查询已有结果；需要新备份时点击“开始备份”。关闭页面不会中断任务，再次输入同一链接即可查看进度和结果。下载 TAR 后解压，打开 `viewer.html` 离线阅读。
 
+### 可选：腾讯云 COS
+
+不配置 COS 时，所有备份继续保存在本地。需要将新备份的归档存入 COS 时，在服务运行环境中设置：
+
+- `TIEBA_COS_BUCKET`：完整桶名（含 APPID）。
+- `TIEBA_COS_REGION`：桶所在地域，例如 `ap-guangzhou`。
+- `TIEBA_COS_SECRET_ID`、`TIEBA_COS_SECRET_KEY`：具有该桶上传、分块上传、读取和设置对象私有权限的访问密钥。
+
+归档上传并校验成功后，本地 TAR 及其压缩副本会删除；任务记录、贴子 JSON 和预览所需数据继续留在本地，因此仍需保留数据目录。已有本地归档不自动迁移。下载通过短期有效的签名链接直接访问 COS，浏览器透明处理传输压缩，用户得到的仍是 TAR 文件。停用 COS 后，已有云端归档需要恢复配置才能下载。
+
 ## 视频演示
 
 [百度贴吧贴子备份工具：旧版脚本演示](https://www.bilibili.com/video/BV1A8NteREva/)

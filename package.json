@@ -14,7 +14,7 @@
     "build:all": "npm run build && npm run build:service",
     "start": "npm run build:service && node --import tsx src/service/server.ts",
     "regression": "node --import tsx scripts/compare.ts",
-    "test": "npm run build:all && node --import tsx --test tests/core.test.ts tests/compression.test.ts tests/api.test.ts tests/server.test.ts",
+    "test": "npm run build:all && node --import tsx --test tests/core.test.ts tests/compression.test.ts tests/api.test.ts tests/server.test.ts tests/storage.test.ts",
     "regression:live": "npm run build:service && node --import tsx scripts/regression-live.ts"
   },
   "keywords": [],
@@ -31,5 +31,8 @@
   },
   "engines": {
     "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "cos-nodejs-sdk-v5": "^3.0.0"
   }
 }
