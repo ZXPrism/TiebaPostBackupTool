@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 test('service starts, holds a durable lock and releases it on SIGTERM', { timeout: 15000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tieba-server-'));
     const child = spawn(process.execPath, ['--import', 'tsx', 'src/service/server.ts'], {
-        env: { ...process.env, TIEBA_DATA_DIR: directory, HOST: '127.0.0.1', PORT: '0' },
+        env: { ...process.env, TIEBA_COOKIE: 'BDUSS=synthetic-startup', TIEBA_DATA_DIR: directory, HOST: '127.0.0.1', PORT: '0' },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     const closed = once(child, 'close');
@@ -40,7 +40,7 @@ test('service starts, holds a durable lock and releases it on SIGTERM', { timeou
         {
             const failed_directory = await mkdtemp(join(tmpdir(), 'tieba-server-failed-'));
             const failed = spawn(process.execPath, ['--import', 'tsx', 'src/service/server.ts'], {
-                env: { ...process.env, TIEBA_DATA_DIR: failed_directory,
+                env: { ...process.env, TIEBA_COOKIE: 'BDUSS=synthetic-startup', TIEBA_DATA_DIR: failed_directory,
                     HOST: '127.0.0.1', PORT: new URL(origin).port }, stdio: 'ignore',
             });
             const [code] = await once(failed, 'close');
@@ -106,5 +106,28 @@ test('native HTTP sends signed forms and cookies over the wire and does not foll
         server.closeAllConnections();
         await new Promise<void>(resolve => server.close(() => resolve()));
         if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
+    }
+});
+
+
+test('service rejects missing or invalid environment cookies before taking the data lock', { timeout: 15000 }, async () => {
+    for (const cookie of [undefined, '', 'BAIDUID=synthetic-private-value']) {
+        const directory = await mkdtemp(join(tmpdir(), 'tieba-server-cookie-'));
+        const env: NodeJS.ProcessEnv = { ...process.env, TIEBA_DATA_DIR: directory, HOST: '127.0.0.1', PORT: '0' };
+        delete env.TIEBA_COOKIE;
+        if (cookie !== undefined) { env.TIEBA_COOKIE = cookie; }
+        const child = spawn(process.execPath, ['--import', 'tsx', 'src/service/server.ts'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        let output = '', stderr = '';
+        child.stdout.on('data', chunk => { output += String(chunk); });
+        child.stderr.on('data', chunk => { stderr += String(chunk); });
+        const [code] = await once(child, 'close');
+        assert.equal(code, 1);
+        assert.equal(output, '');
+        assert.match(stderr, cookie === undefined ? /服务启动失败：未设置 TIEBA_COOKIE/ : /服务启动失败：登录 Cookie 无效/);
+        const log = await readFile(join(directory, 'jobs/service.log'), 'utf8');
+        assert.match(log, /"level":"fatal","event":"service_startup_failed"/);
+        assert(!log.includes('service_listening'));
+        assert(!(stderr + log).includes('synthetic-private-value'));
+        await assert.rejects(access(join(directory, 'server.lock')));
     }
 });

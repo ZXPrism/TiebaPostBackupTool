@@ -4,11 +4,19 @@ import { config, data_dir, jobs_dir } from './config';
 import { JobQueue } from './queue';
 import { create_runner } from './worker';
 import { create_app } from './http';
+import { load_cookie } from './session';
 
 await mkdir(data_dir, { recursive: true, mode: 0o700 });
 const queue = new JobQueue(jobs_dir, create_runner());
 await queue.log('info', 'service_starting', { pid: process.pid, backend: 'api' });
 await queue.log('debug', 'service_configuration', config);
+try {
+    await load_cookie();
+} catch (error) {
+    await queue.log('fatal', 'service_startup_failed', error);
+    console.error(`服务启动失败：${(error as Error).message}`);
+    process.exit(1);
+}
 const lock_path = join(data_dir, 'server.lock');
 const lock = await open(lock_path, 'wx').catch(async error => {
     await queue.log('fatal', 'service_lock_failed', error);
