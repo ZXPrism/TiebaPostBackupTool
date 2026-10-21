@@ -1,6 +1,6 @@
 # Tieba Post Backup Tool （百度贴吧贴子备份工具）
 
-提供两种运行方式：原 Tampermonkey 脚本，以及本机运行的网页备份服务。插件使用旧版贴吧页面解析；服务支持浏览器页面采集和贴吧接口采集两套后端，共享数据格式、图片映射和离线导出代码。服务使用 **headless Chromium** 管理登录会话，无需保持前端页面打开。
+提供两种运行方式：原 Tampermonkey 脚本，以及网页备份服务。插件使用旧版贴吧页面解析；服务通过贴吧接口采集，无需浏览器。
 
 ## 本机备份服务
 
@@ -8,42 +8,24 @@
 
 ```sh
 npm install
-npx playwright install chromium
-
-# 首次使用：在专用浏览器中手动登录，回到终端按 Enter 保存并关闭浏览器
-npm run login
-
-# 启动前后端；打开 http://127.0.0.1:3000
-npm start
-
-# 或使用第二套采集后端（不改动插件；前端操作相同）
-TIEBA_BACKEND=api npm start
+# 通过环境变量提供包含 BDUSS 的 Cookie，打开 http://127.0.0.1:3000
+TIEBA_COOKIE='BDUSS=你的登录凭据' npm start
 ```
 
-网页中输入帖子链接或 ID 即可提交任务。当前版本串行执行，支持查看进度、失败重试、下载 TAR 和单独下载 `post.json`。TAR 包含 `post.json`、`viewer.html`、`images/` 和 `report.json`，解压后打开 `viewer.html` 离线阅读。
+环境变量优先；未设置时读取已有的 `.data/session.json`。该文件为包含 `name`、`value`、`expires` 的 Cookie 数组，`expires` 为 Unix 秒或 `-1`（会话 Cookie）。不要将登录凭据提交到仓库。
 
-只有手动登录命令打开有界面浏览器；备份任务和真实回归始终默认 headless。登录不需要向前端或聊天提供账号密码。专用配置位于 `.data/browser/`，与日常浏览器分开。更新登录前先停止备份服务，同一个配置目录不能被两个浏览器进程同时使用。
+网页中输入帖子链接或 ID 查询已有备份，再点击按钮开始新的备份。TAR 包含 `post.json`、`viewer.html`、`images/` 和 `report.json`，解压后打开 `viewer.html` 离线阅读。
 
-也可全程无界面，从**本机文件**导入 Cookie：
-
-```sh
-npm run login:import -- /absolute/path/to/cookies.json
-```
-
-接受 JSON Cookie 数组，或 Playwright storageState 文件中的 `cookies` 数组，仅导入 `baidu.com` 及其子域的 Cookie；不会导入该文件的 localStorage/IndexedDB。导入会合并到专用配置中。Cookie 至少包含 `name`、`value`、`domain`，可带 `path`、`expires`（或 `expirationDate`）、`secure`、`httpOnly`、`sameSite`。不输出 Cookie 内容。不要将 Cookie 文件提交到仓库。
-
-检测到 BDUSS 仅表示存在登录凭据。`TIEBA_BACKEND` 默认为 `browser`：服务自动准备旧版采集环境，收到新版页面时，调用贴吧自身“回旧版”操作使用的接口，重新加载后继续采集。该操作会更新采集账号的贴吧版本偏好。
-
-`TIEBA_BACKEND=api` 使用 PC 站的 `/c/f/pb/page_pc` 与 `/c/f/pb/nestedFloor` 接口，复用同一登录配置。采集时不打开帖子页面、不滚动、不切换新旧版。主楼、楼层游标分页、楼中楼偏移分页由接口采集器处理，图片采用接口原图地址。两套后端均输出 JSON、HTML 查看器与图片 TAR；`report.json` 记录所用后端。切换后端前先停止旧服务，同一数据目录只运行一个服务。
+服务使用 PC 站的 `/c/f/pb/page_pc` 与 `/c/f/pb/nestedFloor` 接口，处理楼层游标分页和楼中楼偏移分页，图片采用接口原图地址。同一数据目录只运行一个服务。
 
 接口采集期间显示两条进度：“楼层分页”为已获取的分页数，“全帖楼中楼”为累计处理的回复条数（包括楼层响应内已提供的回复），切换楼层时不归零。楼层采集完成后才能确定楼中楼的初始总量；采集中总量标为估计值，随实际增删回复调整，结束时按实际条数显示完成。当前楼层的细节仍单独显示。内容采集结束后显示图片下载和打包进度。
 
-接口后端的内容请求暂定**串行执行，开始时间间隔至少 1 秒**。图片使用独立调度：最多 5 张并发，图片及其重定向请求的启动间隔至少 200 毫秒，保留原下载器每批 5 张、批次之间 1 秒的等待。先采集全部内容，再下载图片；两类请求各自跨任务共享间隔，图片不会占用内容接口的限速队列。内容接口的临时错误最多重试 3 次，不自动降级到网页采集。原浏览器后端及插件的采集节奏不变。
+接口后端的内容请求暂定**串行执行，开始时间间隔至少 1 秒**。图片使用独立调度：最多 5 张并发，图片及其重定向请求的启动间隔至少 200 毫秒，保留原下载器每批 5 张、批次之间 1 秒的等待。先采集全部内容，再下载图片；两类请求各自跨任务共享间隔，图片不会占用内容接口的限速队列。内容接口的临时错误最多重试 3 次，不自动降级到网页采集。插件的采集节奏不变。
 
 可以在启动时调整两个间隔（单位毫秒，必须为正整数）：
 
 ```sh
-TIEBA_BACKEND=api TIEBA_API_INTERVAL_MS=1000 TIEBA_IMAGE_INTERVAL_MS=200 npm start
+TIEBA_API_INTERVAL_MS=1000 TIEBA_IMAGE_INTERVAL_MS=200 npm start
 ```
 
 内容接口单次请求失败后最多再尝试 3 次（合计最多 4 次请求），适用于网络传输失败、超时，以及 HTTP 408、429、500、502、503、504。每次尝试都经过同一个内容请求限速队列，沿用 `TIEBA_API_INTERVAL_MS`，重试成功后继续原来的分页。若服务器返回有效的 `Retry-After`，同时遵守该等待时间；等待期间可以中止任务。业务错误、验证码响应、其他 HTTP 错误、无效 JSON 和字段/正文解析错误不重试。达到上限后保留具体错误并注明已重试 3 次。图片下载仍不自动重试。
@@ -58,25 +40,24 @@ TIEBA_BACKEND=api TIEBA_API_INTERVAL_MS=1000 TIEBA_IMAGE_INTERVAL_MS=200 npm sta
 
 已通过真实网页核实原图失效的“好运”表情（`shoubai_emoji_face_365`）保留为 `[好运]`，继续采集；`report.json` 记录所在楼层、回复 ID、原图地址及已核实的 HTTP 404。这属于报告中的 `notes`（说明），任务正常完成。这一处理仅适用于已确认的失效资源，未知表情不会静默替换。
 
-插件在用户浏览器中运行，遇到新版页面会明确提示切回旧版。服务端则分别报告实际导航错误、HTTP 错误、接口返回的错误码或缺失的页面元素，不根据元素超时推断登录失效。
+插件在用户浏览器中运行，遇到新版页面会明确提示切回旧版。服务端将 HTTP 错误、接口错误码及解析错误记录到日志。
 
 ### 存储和运行约束
 
-- `.data/jobs/<任务ID>/` 保存任务记录、结果及失败截图；服务重启后保留历史记录、继续排队任务，将上次运行中断的任务标记为失败。
+- `.data/jobs/<任务ID>/` 保存任务记录、结果及日志；服务重启后保留历史记录、继续排队任务，将上次运行中断的任务标记为失败。
 - `.data/regression/` 保存真实回归的采集结果和差异报告。
-- 数据目录默认 `.data/`，可用 `TIEBA_DATA_DIR` 指定绝对路径；整个目录已加入 Git 忽略。截图仅供本机诊断，不通过下载 API 暴露。
+- 数据目录默认 `.data/`，可用 `TIEBA_DATA_DIR` 指定绝对路径；整个目录已加入 Git 忽略。日志仅供服务端诊断。
 - 默认监听 `127.0.0.1:3000`，用于本机测试；可通过 `HOST`、`PORT` 修改监听地址和端口。
-- 单实例、单账号、单任务执行，最多 20 个待完成任务。浏览器后端最多 200 个网页分页、30 分钟；接口后端最多 2000 个楼层分页、每层最多 2000 个楼中楼分页，任务最多 60 分钟（从任务开始执行计时，包含图片和打包）。网页页数与接口页数不同，不可直接比较。退出服务会中止当前任务。
+- 单实例、单账号、单任务执行，最多 20 个待完成任务。接口后端最多 2000 个楼层分页、每层最多 2000 个楼中楼分页，任务最多 60 分钟（从任务开始执行计时，包含图片和打包）。网页页数与接口页数不同，不可直接比较。退出服务会中止当前任务。
 - 一小时是目标及超时上限，不是完成保证；楼中楼分布、图片数、带宽及限流都会影响时长。尚未对主账号运行大帖压力测试。离线规模测试覆盖假设的 5700 楼（190 个网页分页 × 30 楼）及 2 万条楼中楼，产生 380 次楼层请求和 2000 次楼中楼请求；1 秒间隔的模拟调度为 39 分 39 秒，不包含真实网络延迟、图片和打包，也不代表目标帖的实际请求分布。
 - 结果暂不自动过期；可在服务停止后手动清理旧任务目录。异常退出遗留 `.data/server.lock` 时，应确认没有服务进程后再移除该锁。
-- 浏览器后端的局部解析失败或图片下载失败标记“部分完成”，原因写入 `report.json`；图片失败时保留占位图。接口后端对上述完整性检查和图片失败直接报错。页面结构改变但未触发解析错误的情况仍需依靠回归检查识别。
 
 ## 回归测试
 
-`tests/regression/post.json` 是由原插件生成的固定参考文件，测试不会覆盖它。当前覆盖 28 个楼层、36 条楼中楼和 24 项图片映射；这是单页帖子，没有显式的回复对象字段。跨页与延迟楼中楼加载由额外的离线浏览器场景覆盖。
+`tests/regression/post.json` 是经确认的接口采集结果，测试不会覆盖它。当前覆盖 28 个楼层、36 条楼中楼和 24 项图片映射。
 
 ```sh
-# 类型、风格，以及离线单元/浏览器集成测试（需要安装 Chromium，无需百度登录）
+# 类型、风格，以及离线单元及服务集成测试（无需百度登录）
 npm run type-check
 npm run lint
 npm test
@@ -90,18 +71,15 @@ npm run regression -- tests/regression/post.json /path/to/actual/post.json --str
 # 如确实只允许图片命名不同，可以显式按 image_map 还原原始 URL 后比较
 npm run regression -- tests/regression/post.json /path/to/actual/post.json --normalize-images
 
-# 登录之后，停止备份服务，直接 headless 采集参考帖子并比较
-npm run regression:live -- tests/regression/post.json
-
 # 用接口后端执行真实回归（会使用登录账号并下载图片；采用上述间隔）
-TIEBA_BACKEND=api npm run regression:live -- tests/regression/post.json
+npm run regression:live -- tests/regression/post.json
 ```
 
 比较忽略对象键顺序，保留所有字段、数组顺序、HTML 内容和楼层跳号。唯一默认接受的内容差异是普通正文中连续 ASCII 空格的数量：多个空格与一个空格等价，但不会删除空格，也不合并换行、制表符或全角空格；HTML 属性和 `pre`/`code` 等保留空白的区域不适用。不忽略日期、作者、IP 属地、回复关系等差异。`--normalize-images` 仍是显式选项，按完整原始 URL 比较，不将不同尺寸或不同时间戳的 URL 自动视为一致。
 
 命令报告严格差异、接受的空格差异及剩余差异。剩余差异返回非零退出码并指出字段路径。真实回归还会在有采集警告（含图片失败）时失败，将结果、剩余 `diff.json` 和包含严格/接受/剩余差异的 `regression.json` 写入新的回归目录。
 
-`tests/regression/api-responses.json` 保存本次回归帖的 5 份内容接口响应，已去除登录用户、会话及与采集无关的字段。`npm test` 离线重放它们，验证 28 个楼层、36 条楼中楼、分页完整性、错误处理、服务打包及 HTML 渲染，不访问百度账号。当前接口结果相对插件基准有 76 处严格差异，其中 1 处连续空格差异获接受，剩余 75 处仍报告（页数、回复总数、昵称、HTML 及图片/主页 URL）。这些离线测试通过表示采集器行为符合记录，不代表跨后端回归已经通过。基准文件不会被改写。
+`tests/regression/api-responses.json` 保存本次回归帖的 5 份内容接口响应，已去除登录用户、会话及与采集无关的字段。`npm test` 离线重放它们，验证 28 个楼层、36 条楼中楼、分页完整性、错误处理、服务打包，不访问百度账号。历史接口响应与当前基准仍有会话时间参数和图片映射等差异；离线测试保留这些差异的断言，不代表重新采集的真实回归通过。基准文件不会被测试改写。
 
 `tests/regression/api-unnumbered-emoticon.json` 保留帖子 `11052619456` 第 85 楼楼中楼中触发错误的表情字段，验证无数字后缀的 `image_emoticon`（呵呵）能够采集、转换并映射到离线图片。该表情使用贴吧当前的官方图片地址；旧的 `client/image_emoticon.png` 地址返回 404。
 
@@ -111,20 +89,20 @@ TIEBA_BACKEND=api npm run regression:live -- tests/regression/post.json
 
 `tests/regression/api-search-link.json` 保留同一帖第 313 楼的正文，验证 `type=40` 仅保留关键词文字及其与普通文本的顺序，不导出附加搜索链接、图标或主题样式。
 
-验收分两步：更新后的插件输出对照参考文件；服务端输出对照同一参考文件。离线测试中的页面是可控的合成场景，不能替代真实贴吧回归。帖子本身被编辑、回复变化、账号可见性变化等也可能导致差异，应人工判定原因，不自动更新基准。
+验收分两步：更新后的插件输出对照参考文件；服务端输出对照同一参考文件。离线接口响应不能替代真实贴吧回归。帖子本身被编辑、回复变化、账号可见性变化等也可能导致差异，应人工判定原因，不自动更新基准。
 
 ## 代码结构
 
-- `src/shared/page-parser.ts`：两端在页面中执行的 DOM 提取、滚动与楼中楼分页。
+- `src/shared/page-parser.ts`：插件在页面中执行的 DOM 提取、滚动与楼中楼分页。
 - `src/shared/api-collector.ts`：独立于请求传输的接口分页、完整性检查和内容转换；本轮仅服务接入。
 - `src/service/api.ts`：PC 接口签名与传输、请求排队和间隔控制。
 - `src/shared/post.ts`、`src/image_handler.ts`：共享的数据整理、图片映射和导出；图片下载可注入不同传输实现。
 - `src/parser.ts`、`src/main.ts`：Tampermonkey 的 GM 状态保存、页面导航及按钮界面。
-- `src/service/`：HTTP API、磁盘任务队列、headless Worker、浏览器配置。
+- `src/service/`：HTTP API、磁盘任务队列、接口采集任务、Cookie 会话。
 - `src/web/`：不依赖前端框架的提交、进度和下载页面。
-- `src/shared/regression.ts`、`scripts/`、`tests/`：比较器、登录/回归命令和离线测试。
+- `src/shared/regression.ts`、`scripts/`、`tests/`：比较器、回归命令和离线测试。
 
-`npm run build` 仍只构建插件，产物为 `dist/main.global.js`。`npm run build:service` 构建云端注入脚本及网页脚本，`npm run build:all` 构建两端。服务通过 Node.js + tsx 运行 TypeScript 源码，当前安装时需要保留开发依赖。
+`npm run build` 仍只构建插件，产物为 `dist/main.global.js`。`npm run build:service` 构建服务网页脚本，`npm run build:all` 构建两端。服务通过 Node.js + tsx 运行 TypeScript 源码，当前安装时需要保留开发依赖。
 
 [【百度贴吧贴子备份工具-演示】](https://www.bilibili.com/video/BV1A8NteREva/?share_source=copy_web&vd_source=34d2dac1f41bd4ca259dd99a9bbdc8b2)
 

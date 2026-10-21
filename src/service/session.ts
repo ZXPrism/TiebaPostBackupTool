@@ -16,16 +16,16 @@ export async function load_cookie(path = session_path): Promise<string> {
     try { text = await readFile(path, 'utf8'); }
     catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            throw new Error('未找到独立登录会话：请设置 TIEBA_COOKIE，或运行 npm run login；已有浏览器登录可运行 npm run login:export', { cause: error });
+            throw new Error('未找到独立登录会话：请设置 TIEBA_COOKIE 环境变量', { cause: error });
         }
         throw new Error('读取独立登录会话文件失败', { cause: error });
     }
     let cookies: SessionCookie[];
     try { cookies = JSON.parse(text); }
-    catch { throw new Error('独立登录会话不是有效 JSON，请重新登录或导出'); }
+    catch { throw new Error('独立登录会话不是有效 JSON，请检查会话文件或设置 TIEBA_COOKIE'); }
     if (!Array.isArray(cookies) || cookies.some(cookie => !cookie || typeof cookie.name !== 'string'
         || typeof cookie.value !== 'string' || typeof cookie.expires !== 'number'
-        || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(cookie.name) || /[;\r\n]/.test(cookie.value))) { throw new Error('独立登录会话格式无效，请重新登录或导出'); }
+        || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(cookie.name) || /[;\r\n]/.test(cookie.value))) { throw new Error('独立登录会话格式无效，请检查会话文件或设置 TIEBA_COOKIE'); }
     return validate_cookie(cookies.filter(cookie => cookie.expires === -1 || cookie.expires > Date.now() / 1000)
         .map(cookie => `${cookie.name}=${cookie.value}`).join('; '));
 }

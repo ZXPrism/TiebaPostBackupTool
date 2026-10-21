@@ -1,6 +1,6 @@
 import type { Post, Floor, Comment } from '../types';
 
-/** Runs inside the Tieba page in both Tampermonkey and the headless worker. */
+/** Runs inside the Tieba page in Tampermonkey. */
 export class PageParser {
     public readonly warnings: string[] = [];
 

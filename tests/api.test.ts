@@ -709,7 +709,7 @@ test('API startup configuration uses an hour budget and validates rate overrides
     }
 });
 
-test('native HTTP backend backs up fixtures without Chromium and scopes the environment cookie', async () => {
+test('native HTTP backend backs up fixtures and scopes the environment cookie', async () => {
     const { open_http_session } = await import('../src/service/transport');
     const { validate_cookie } = await import('../src/service/session');
     const previous = process.env.TIEBA_COOKIE;
@@ -773,7 +773,7 @@ test('independent session preserves expiry, rejects invalid environment override
     const previous = process.env.TIEBA_COOKIE;
     delete process.env.TIEBA_COOKIE;
     try {
-        await assert.rejects(load_cookie(path), /login:export/);
+        await assert.rejects(load_cookie(path), /TIEBA_COOKIE/);
         await save_session([{ name: 'BDUSS', value: 'synthetic', expires: -1 },
             { name: 'expired', value: 'old', expires: 1 }], path);
         assert.equal(await load_cookie(path), 'BDUSS=synthetic');

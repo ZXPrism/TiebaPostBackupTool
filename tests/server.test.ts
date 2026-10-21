@@ -2,19 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, access, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-test('service starts without a browser, holds a durable lock and releases it on SIGTERM', { timeout: 15000 }, async () => {
+test('service starts, holds a durable lock and releases it on SIGTERM', { timeout: 15000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tieba-server-'));
-    const guard = join(directory, 'no-browser.mjs');
-    await writeFile(guard, `import { registerHooks } from 'node:module';
-registerHooks({ resolve(specifier, context, next) {
-    if (specifier.includes('playwright')) { throw new Error('Service must not load Playwright'); }
-    return next(specifier, context);
-} });`);
-    const child = spawn(process.execPath, ['--import', guard, '--import', 'tsx', 'src/service/server.ts'], {
+    const child = spawn(process.execPath, ['--import', 'tsx', 'src/service/server.ts'], {
         env: { ...process.env, TIEBA_DATA_DIR: directory, HOST: '127.0.0.1', PORT: '0' },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
