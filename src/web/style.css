@@ -14,7 +14,7 @@ main { width: min(900px, calc(100% - 40px)); margin: 64px auto 32px; }
 header { margin-bottom: 32px; padding-bottom: 28px; border-bottom: 2px solid #161616; }
 .eyebrow { color: var(--muted); font-size: 11px; letter-spacing: .18em; font-weight: 600; }
 h1 { font-size: clamp(26px, 4vw, 36px); line-height: 1.4; letter-spacing: -.025em; margin: 14px 0; font-weight: 650; }
-header p, footer { color: var(--muted); line-height: 1.7; }
+header p { color: var(--muted); line-height: 1.7; }
 header p { margin-bottom: 0; }
 h2 { font-size: 18px; margin: 0 0 22px; font-weight: 600; }
 .panel, .job { background: #fff; border: 1px solid var(--border); border-radius: 4px; padding: 28px; }
@@ -54,7 +54,6 @@ summary:hover { color: #161616; }
 .collection-progress { margin-top: 20px; }
 .progress-caption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; font-size: 13px; line-height: 1.7; }
 .progress-caption span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
-footer { font-size: 12px; margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--border); }
 [hidden] { display: none !important; }
 .backups-heading { font-size: 15px; font-weight: 600; margin: 28px 0 16px; }
 #active-backup h3 { margin-top: 0; font-size: 16px; font-weight: 600; }
