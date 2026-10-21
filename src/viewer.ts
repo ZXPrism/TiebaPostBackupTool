@@ -13,37 +13,52 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
     });
 
     return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="auto">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${escape(post.title)} - Tieba Backup</title>
     <style>
+        :root { color-scheme: light; --page: #f5f5f5; --surface: #fff; --reply: #f9f9f9; --text: #222; --heading: #333; --muted: #666; --subtle: #888; --border: #bbb; --divider: #e0e0e0; --link: #0055cc; }
+        :root[data-theme="dark"] { color-scheme: dark; --page: #151515; --surface: #222; --reply: #2b2b2b; --text: #e6e6e6; --heading: #f0f0f0; --muted: #b5b5b5; --subtle: #aaa; --border: #666; --divider: #444; --link: #8ab4f8; }
+        @media (prefers-color-scheme: dark) {
+            :root[data-theme="auto"] { color-scheme: dark; --page: #151515; --surface: #222; --reply: #2b2b2b; --text: #e6e6e6; --heading: #f0f0f0; --muted: #b5b5b5; --subtle: #aaa; --border: #666; --divider: #444; --link: #8ab4f8; }
+        }
+        .theme-toggle { position: absolute; top: 14px; right: 14px; display: grid; place-items: center; width: 36px; height: 36px; padding: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text); cursor: pointer; }
+        .theme-toggle:hover { background: var(--reply); }
+        .theme-toggle:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+        .theme-toggle svg { display: none; fill: currentColor; }
+        :root[data-theme="auto"] .theme-auto, :root[data-theme="light"] .theme-light, :root[data-theme="dark"] .theme-dark { display: block; }
+
         body {
             font-family: Arial, sans-serif;
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
-            background: #f5f5f5;
+            background: var(--page);
+            color: var(--text);
         }
         .header {
-            background: white;
+            position: relative;
+            background: var(--surface);
             padding: 20px;
             border-radius: 8px;
             margin-bottom: 20px;
         }
         .header h1 {
+            padding-right: 38px;
+            overflow-wrap: anywhere;
             margin: 0 0 10px 0;
-            color: #333;
+            color: var(--heading);
         }
         .header .meta {
-            color: #666;
+            color: var(--muted);
             font-size: 14px;
         }
         .header .backup-date {
             display: block;
             margin-bottom: 10px;
-            color: #888;
+            color: var(--subtle);
             font-size: 12px;
         }
         .header .original-post {
@@ -51,27 +66,27 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
             overflow-wrap: anywhere;
         }
         .pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
-        .pagination button, .pagination input { padding: 6px 10px; border: 1px solid #bbb; border-radius: 3px; background: white; color: #222; }
-        .pagination button:disabled { color: #999; }
+        .pagination button, .pagination input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); }
+        .pagination button:disabled { color: var(--subtle); }
         .pagination input { width: 65px; }
-        .pagination label { font-size: 14px; color: #666; }
+        .pagination label { font-size: 14px; color: var(--muted); }
         .floor {
-            background: white;
+            background: var(--surface);
             padding: 15px;
             border-radius: 8px;
             margin-bottom: 15px;
         }
         .floor .author {
             font-weight: bold;
-            color: #0055cc;
+            color: var(--link);
         }
         .floor .date {
-            color: #999;
+            color: var(--subtle);
             font-size: 12px;
             margin-left: 10px;
         }
         .floor .ip {
-            color: #999;
+            color: var(--subtle);
             font-size: 12px;
             margin-left: 10px;
         }
@@ -95,7 +110,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
             display: inline-block;
         }
         .floor .floor-index {
-            color: #999;
+            color: var(--subtle);
             font-size: 12px;
             margin-bottom: 5px;
         }
@@ -107,13 +122,13 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
         .sub-comments {
             margin-left: 20px;
             padding-left: 15px;
-            border-left: 2px solid #e0e0e0;
+            border-left: 2px solid var(--divider);
             margin-top: 10px;
         }
         .sub-comment {
             margin: 8px 0;
             padding: 8px;
-            background: #f9f9f9;
+            background: var(--reply);
             border-radius: 4px;
             display: flex;
             align-items: center;
@@ -137,7 +152,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
             object-fit: cover;
         }
         .author-link {
-            color: #0055cc;
+            color: var(--link);
             text-decoration: none;
             font-weight: bold;
         }
@@ -145,11 +160,11 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
             text-decoration: underline;
         }
         .reply-to {
-            color: #666;
+            color: var(--muted);
             font-size: 12px;
         }
         .reply-to a {
-            color: #0055cc;
+            color: var(--link);
             text-decoration: none;
         }
         .reply-to a:hover {
@@ -159,6 +174,12 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
 </head>
 <body>
     <div class="header">
+        <!-- Material Icons by Google, Apache-2.0: https://github.com/google/material-design-icons -->
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="当前：自动（跟随系统）；切换到白天" title="自动（跟随系统） · 切换到白天">
+            <svg class="theme-light" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 0 24 24" width="24"><path d="M0 0h24v24H0z" fill="none"/><path d="M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.95h-2V3.5h2V.55zm7.45 3.91l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zm-3.21 13.7l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 10.5v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 16.95h2V19.5h-2v2.95zm-7.45-3.91l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z"/></svg>
+            <svg class="theme-dark" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 0 24 24" width="24"><path d="M0 0h24v24H0z" fill="none"/><path d="M10 2c-1.82 0-3.53.5-5 1.35C7.99 5.08 10 8.3 10 12s-2.01 6.92-5 8.65C6.47 21.5 8.18 22 10 22c5.52 0 10-4.48 10-10S15.52 2 10 2z"/></svg>
+            <svg class="theme-auto" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 0 24 24" width="24"><path d="M0 0h24v24H0z" fill="none"/><path d="M10.85 12.65h2.3L12 9l-1.15 3.65zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM14.3 16l-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9z"/></svg>
+        </button>
         <h1>${escape(post.title)}</h1>
         <time class="backup-date" datetime="${backup_date.toISOString()}">备份日期：${escape(formatted_date)}（UTC+8）</time>
         <div class="meta original-post">原帖：<a class="author-link" href="${escape(post_url)}" target="_blank" rel="noopener noreferrer">${escape(post_url)}</a></div>
@@ -183,6 +204,17 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
     </nav>
 
     <script>
+        const themeButton = document.getElementById('theme-toggle');
+        const themes = ['auto', 'light', 'dark'];
+        const themeNames = { auto: '自动（跟随系统）', light: '白天', dark: '黑夜' };
+        themeButton.addEventListener('click', () => {
+            const current = document.documentElement.dataset.theme;
+            const next = themes[(themes.indexOf(current) + 1) % themes.length];
+            const following = themes[(themes.indexOf(next) + 1) % themes.length];
+            document.documentElement.dataset.theme = next;
+            themeButton.title = themeNames[next] + ' · 切换到' + themeNames[following];
+            themeButton.setAttribute('aria-label', '当前：' + themeNames[next] + '；切换到' + themeNames[following]);
+        });
         try {
             const post = ${json_data};
 
