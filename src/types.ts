@@ -32,14 +32,3 @@ export interface Comment {
 export interface ImageMap {
     [original_url: string]: string, // Identical downloaded images may share the same local filename.
 }
-
-// Parsing state for multi-page support
-export interface ParseState {
-    active: boolean;           // Is parsing in progress
-    post_id: number;           // Post ID being parsed
-    current_page: number;      // Current page number (1-indexed)
-    total_pages: number;       // Total pages to parse
-    collected_floors: Floor[]; // Accumulated floor data from all pages
-    timestamp: number;         // When parsing started (for timeout check)
-    warnings?: string[];       // Diagnostics only; not part of post.json
-}

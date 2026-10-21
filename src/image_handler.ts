@@ -169,48 +169,11 @@ export class ImageHandler {
         return unique;
     }
 
-    /**
-     * Fetch single image as blob using GM_xmlhttpRequest to bypass CORS.
-     */
     private async _fetch_image(url: string): Promise<Blob> {
         if (this.fetch_image) { return this.fetch_image(url); }
-        return new Promise((resolve, reject) => {
-            // Check if GM_xmlhttpRequest is available (Tampermonkey)
-            if (typeof GM_xmlhttpRequest !== 'undefined') {
-                interface GMResponse {
-                    status: number;
-                    response: Blob;
-                }
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: url,
-                    responseType: 'blob',
-                    timeout: 30000,
-                    ontimeout: () => reject(new Error('Image download timed out')),
-                    onload: (response: GMResponse) => {
-                        if (response.status === 200) {
-                            resolve(response.response);
-                        } else {
-                            reject(new Error(`HTTP ${response.status}`));
-                        }
-                    },
-                    onerror: (_error: unknown) => {
-                        reject(new Error('GM_xmlhttpRequest error'));
-                    },
-                });
-            } else {
-                // Fallback to regular fetch (may fail due to CORS)
-                fetch(url, { signal: AbortSignal.timeout(30000) })
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error(`HTTP ${response.status}`);
-                        }
-                        return response.blob();
-                    })
-                    .then(blob => resolve(blob))
-                    .catch(error => reject(error));
-            }
-        });
+        const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+        if (!response.ok) { throw new Error(`HTTP ${response.status}`); }
+        return response.blob();
     }
 
     /**
