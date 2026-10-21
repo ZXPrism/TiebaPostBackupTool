@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { JobQueue } from './queue';
-import { project_dir } from './config';
+import { config, project_dir } from './config';
 import { compressed_file, negotiate_encoding } from './compression';
 import { parse_post_url } from './model';
 import { active_backup } from './progress';
@@ -43,7 +43,7 @@ async function body(request: IncomingMessage): Promise<unknown> {
     return JSON.parse(Buffer.concat(parts).toString('utf8')) as unknown;
 }
 
-export function create_app(queue: JobQueue) {
+export function create_app(queue: JobQueue, base_path = config.base_path) {
     return createServer((request, response) => {
         const started = Date.now();
         const request_info = { method: request.method, path: request.url?.split('?')[0] };
@@ -67,7 +67,14 @@ export function create_app(queue: JobQueue) {
 
     async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
         const url = new URL(request.url || '/', 'http://localhost');
-        const path = url.pathname;
+        if (base_path && url.pathname === base_path && ['GET', 'HEAD'].includes(request.method || '')) {
+            response.writeHead(308, { Location: base_path + '/' + url.search });
+            response.end(); return;
+        }
+        if (base_path && !url.pathname.startsWith(base_path + '/')) {
+            json(response, 404, { error: '页面不存在' }); return;
+        }
+        const path = url.pathname.slice(base_path.length);
         if (path.startsWith('/api/')) {
             // Require a same-origin JSON request for mutations, including loopback operation.
             if (request.method === 'POST') {

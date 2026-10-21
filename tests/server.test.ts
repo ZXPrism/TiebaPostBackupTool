@@ -131,3 +131,55 @@ test('service rejects missing or invalid environment cookies before taking the d
         await assert.rejects(access(join(directory, 'server.lock')));
     }
 });
+
+test('configured base paths cover redirects, assets, queries, submissions, snapshots and downloads', async () => {
+    const { JobQueue } = await import('../src/service/queue');
+    const { create_app } = await import('../src/service/http');
+    const { writeFile } = await import('node:fs/promises');
+    const post = JSON.parse(await readFile('tests/regression/post.json', 'utf8'));
+    for (const prefix of ['', '/tpbt', '/tools/archive']) {
+        const root = await mkdtemp(join(tmpdir(), 'tieba-prefix-'));
+        const queue = new JobQueue(root, async (_job, directory) => {
+            await writeFile(join(directory, 'post.json'), JSON.stringify(post));
+            await writeFile(join(directory, 'backup.tar'), 'test archive');
+            return { filename: 'backup.tar', floor_count: 28, image_count: 20, warnings: [] };
+        });
+        await queue.initialize();
+        const server = create_app(queue, prefix);
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        assert(address && typeof address !== 'string');
+        const origin = `http://127.0.0.1:${address.port}`;
+        const base = origin + prefix;
+        try {
+            if (prefix) {
+                const redirect = await fetch(base + '?x=1', { redirect: 'manual' });
+                assert.equal(redirect.status, 308);
+                assert.equal(redirect.headers.get('location'), prefix + '/?x=1');
+                for (const path of ['/', '/api/posts?url=1234', prefix + '-other/', prefix + '/.codex/server.md']) {
+                    assert.equal((await fetch(origin + path)).status, 404);
+                }
+            }
+            const html = await (await fetch(base + '/')).text();
+            assert(html.includes('src="./app.js"'));
+            assert(html.includes('href="./style.css"'));
+            for (const asset of ['/app.js', '/style.css']) { assert.equal((await fetch(base + asset)).status, 200); }
+            const url = base + '/api/posts?url=' + encodeURIComponent('https://tieba.baidu.com/p/3022463586?pn=1');
+            assert.deepEqual((await (await fetch(url)).json()).backups, []);
+            const submitted = await fetch(base + '/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ url: String(post.id) }) });
+            assert.equal(submitted.status, 202);
+            const deadline = Date.now() + 3000;
+            while (queue.list()[0]?.status !== 'complete' && Date.now() < deadline) { await new Promise(resolve => setTimeout(resolve, 10)); }
+            const result = await (await fetch(url)).json();
+            assert.equal(result.backups.length, 1);
+            const endpoint = base + '/api/jobs/' + result.backups[0].id;
+            assert.equal((await (await fetch(endpoint + '/snapshot')).json()).floors.length, 5);
+            assert.deepEqual(await (await fetch(endpoint + '/post.json')).json(), post);
+            assert.equal(await (await fetch(endpoint + '/download')).text(), 'test archive');
+        } finally {
+            await queue.close();
+            server.closeAllConnections();
+            await new Promise<void>(resolve => server.close(() => resolve()));
+        }
+    }
+});

@@ -56,7 +56,7 @@ input.addEventListener('input', reset_selection);
 
 async function query(value: string, token: number): Promise<void> {
     const version = ++read_version;
-    const response = await api(`/api/posts?url=${encodeURIComponent(value)}`);
+    const response = await api(`api/posts?url=${encodeURIComponent(value)}`);
     const result = await response.json() as PostBackups;
     if (token !== generation || version !== read_version) { return; }
     selected = result;
@@ -79,7 +79,7 @@ start.addEventListener('click', () => {
     const token = generation;
     starting = true;
     start.disabled = true;
-    void api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: post.url }) })
+    void api('api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: post.url }) })
         .then(async () => {
             if (token !== generation) { return; }
             submitted_here = true;
@@ -92,7 +92,7 @@ start.addEventListener('click', () => {
 });
 
 async function download(backup: BackupSummary): Promise<void> {
-    const response = await api(`/api/jobs/${backup.id}/download`);
+    const response = await api(`api/jobs/${backup.id}/download`);
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement('a');
     link.href = url;
@@ -203,7 +203,7 @@ function preview(backup: BackupSummary): HTMLDetailsElement {
         if (!details.open || loaded || loading) { return; }
         loading = true;
         content.textContent = '正在读取…';
-        void api(`/api/jobs/${backup.id}/snapshot`).then(async response => {
+        void api(`api/jobs/${backup.id}/snapshot`).then(async response => {
             const snapshot = await response.json() as Snapshot;
             content.replaceChildren(node('p', '正文节选 · 前 5 楼，不加载图片', 'hint'));
             for (const floor of snapshot.floors) {
