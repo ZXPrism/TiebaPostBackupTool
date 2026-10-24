@@ -16,7 +16,7 @@ export interface Job {
     phase_timing?: { phase: ActiveBackup['phase']; started_at: number; initial_current: number };
     warnings: string[];
     error?: string;
-    failure_reason?: 'post_unavailable';
+    failure_reason?: 'post_unavailable' | 'disk_space';
     filename?: string;
     floor_count?: number;
     image_count?: number;

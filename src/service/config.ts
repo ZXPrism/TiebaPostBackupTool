@@ -7,6 +7,7 @@ export interface ServiceConfig {
     base_path: string;
     data_dir: string;
     max_pending: number;
+    min_free_disk_bytes: number;
     api_request_interval_ms: number;
     image_request_interval_ms: number;
     image_concurrency: number;
@@ -55,6 +56,7 @@ export function load_config(path: string): ServiceConfig {
     fields(value, {
         host: nonempty, port: integer(0, 65535),
         base_path: v => typeof v === 'string' && (v === '' || /^(?:\/[A-Za-z0-9_-]+)+$/.test(v)),
+        min_free_disk_bytes: integer(1073741824),
         data_dir: nonempty, max_pending: integer(1), api_request_interval_ms: integer(1, 2147483647),
         image_request_interval_ms: integer(1, 2147483647), image_concurrency: integer(1),
         image_batch_delay_ms: integer(0, 2147483647), max_image_bytes: integer(1),

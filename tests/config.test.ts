@@ -24,7 +24,7 @@ test('configuration requires every field and rejects unknown fields and unsafe v
         assert.throws(() => load_config(file), /缺少配置项：config.cos/);
     }
     for (const patch of [
-        { max_pending: 0 }, { max_pending: '20' }, { max_pending: 1.5 }, { image_concurrency: 0 },
+        { min_free_disk_bytes: 1073741823 }, { min_free_disk_bytes: "2147483648" }, { max_pending: 0 }, { max_pending: '20' }, { max_pending: 1.5 }, { image_concurrency: 0 },
         { api_request_interval_ms: 0 }, { port: 65536 }, { api_max_retries: -1 },
         { job_timeout_ms: 2147483648 }, { base_path: '//bad' }, { data_dir: '' },
         { typo: 1 }, { cos: { ...template.cos, enabled: true } },

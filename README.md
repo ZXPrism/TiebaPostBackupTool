@@ -34,7 +34,7 @@ npm start
 
 服务启动时必须读取完整的 JSON 配置，默认使用项目根目录的 [config.json](config.json)。修改文件后重启服务生效。文件不存在、JSON 无效、缺少字段、出现未知字段或值不合法时，服务拒绝启动，不会补充默认值。
 
-默认访问地址为 `http://127.0.0.1:3000`。如需从其他设备访问，将配置中的 `host` 改为 `0.0.0.0`，并在防火墙和云安全组开放配置中的 `port`。长期运行可使用 systemd，并在其运行环境中设置 `TIEBA_COOKIE`。
+默认访问地址为 `http://127.0.0.1:3000`。如需从其他设备访问，将配置中的 `host` 改为 `0.0.0.0`，并在防火墙和云安全组开放配置中的 `port`。长期运行可使用 systemd，并在其运行环境中设置 `TIEBA_COOKIE`。可在 unit 的 `[Service]` 中设置 `MemoryMax=2G`，限制服务总内存；超过硬上限可能被系统终止。
 
 也可以复制完整配置，使用 `TIEBA_CONFIG=/绝对路径/config.json npm start` 指定部署配置文件。原有 `HOST`、`PORT`、`TIEBA_DATA_DIR`、`TIEBA_BASE_PATH` 和采集间隔环境变量不再覆盖 JSON 配置。
 
@@ -43,6 +43,7 @@ npm start
 | `host`、`port` | 监听地址和端口；端口 0 表示由系统分配 |
 | `base_path` | 服务路径前缀；空字符串表示根路径，例如 `/tpbt`，不带末尾斜杠；反向代理需保留此前缀 |
 | `data_dir` | 数据目录，默认 `.data`；相对路径以项目根目录为基准 |
+| `min_free_disk_bytes` | 启动新任务所需的磁盘可用空间，单位字节；默认 2 GiB，最低允许 1 GiB；提交和出队时检查，不中断已运行任务 |
 | `max_pending` | 正在执行与排队任务的总上限 |
 | `api_request_interval_ms` | 内容接口请求的最小启动间隔，重试也受其约束 |
 | `image_request_interval_ms` | 图片请求的最小启动间隔 |

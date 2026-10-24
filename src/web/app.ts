@@ -230,7 +230,8 @@ function render(result: PostBackups): void {
     element('last-failure').hidden = !show_failure;
     element('failure-message').textContent = result.failure_reason === 'post_unavailable'
         ? '贴子无法访问，可能已被删除。请检查贴子链接或 ID。'
-        : '未能完成备份，未生成新的备份结果。';
+        : result.failure_reason === 'disk_space' ? '服务器磁盘空间不足，暂时无法开始备份'
+            : '未能完成备份，未生成新的备份结果。';
     if (show_failure) { notify(''); }
     render_active(show_failure ? undefined : result.active);
     const encoded = JSON.stringify(result.backups);

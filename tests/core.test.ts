@@ -310,3 +310,44 @@ test('URL time rule accepts only observed numeric avatar/profile timestamps and 
     actual.floor_list[0].comment.content += ' t=9999999999';
     assert(regression_report(baseline, actual).differences.some(diff => diff.path.endsWith('.content')));
 });
+
+test('disk threshold rejects new submissions and queued work without interrupting the running job', async () => {
+    const { config } = await import('../src/service/config');
+    const { DiskSpaceError } = await import('../src/service/queue');
+    const root = await mkdtemp(join(tmpdir(), 'tieba-disk-'));
+    const original = config.min_free_disk_bytes;
+    let release!: () => void;
+    let started!: () => void;
+    const running = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let calls = 0;
+    const queue = new JobQueue(root, async () => {
+        calls++; started(); await gate;
+        return { filename: 'test.tar', floor_count: 1, image_count: 0, warnings: [] };
+    });
+    try {
+        await queue.initialize();
+        const first = await queue.submit('123');
+        await running;
+        const second = await queue.submit('124');
+        config.min_free_disk_bytes = Number.MAX_SAFE_INTEGER;
+        await assert.rejects(queue.submit('125'), DiskSpaceError);
+        assert.equal(queue.list().length, 2);
+        assert.equal((await queue.submit('123')).id, first.id);
+        release();
+        const deadline = Date.now() + 3000;
+        while (second.status !== 'failed' && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.equal(first.status, 'complete');
+        assert.equal(second.status, 'failed');
+        assert.equal(second.failure_reason, 'disk_space');
+        assert.equal(calls, 1);
+        config.min_free_disk_bytes = original;
+        await queue.submit('126');
+    } finally {
+        release();
+        await queue.close();
+        config.min_free_disk_bytes = original;
+    }
+});

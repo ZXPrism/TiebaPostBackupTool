@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { JobQueue } from './queue';
-import { QueueFullError } from './queue';
+import { DiskSpaceError, QueueFullError } from './queue';
 import { config, project_dir } from './config';
 import { compressed_file, negotiate_encoding } from './compression';
 import { parse_post_url } from './model';
@@ -103,7 +103,7 @@ export function create_app(queue: JobQueue, base_path = config.base_path) {
                     json(response, 202, post_backups(queue, post));
                 } catch (error) {
                     await queue.log('error', 'submit_failed', { post_id: post.id, error });
-                    json(response, 503, { error: error instanceof QueueFullError ? error.message : '暂时无法开始备份，请稍后再试' });
+                    json(response, 503, { error: error instanceof QueueFullError || error instanceof DiskSpaceError ? error.message : '暂时无法开始备份，请稍后再试' });
                 }
                 return;
             }

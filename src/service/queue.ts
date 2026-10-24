@@ -1,4 +1,5 @@
 import { PostUnavailableError } from './api';
+import { statfsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,6 +13,10 @@ import { record_progress } from './progress';
 
 export class QueueFullError extends Error {
     constructor() { super('任务队列已满，请稍后再试'); }
+}
+
+export class DiskSpaceError extends Error {
+    constructor() { super('服务器磁盘空间不足，暂时无法开始备份'); }
 }
 
 /** A single worker with durable job records. Interrupted jobs are never reported as complete. */
@@ -67,6 +72,11 @@ export class JobQueue {
         return this.logger.write(level, event, detail, id);
     }
 
+    private check_disk_space(): void {
+        const space = statfsSync(this.root, { bigint: true });
+        if (space.bavail * space.bsize < BigInt(config.min_free_disk_bytes)) { throw new DiskSpaceError(); }
+    }
+
     async submit(input: unknown): Promise<Job> {
         if (this.stopped) { throw new Error('服务正在停止'); }
         const post = parse_post_url(input);
@@ -77,6 +87,7 @@ export class JobQueue {
             return existing;
         }
         if (pending.length >= config.max_pending) { throw new QueueFullError(); }
+        this.check_disk_space();
         const now = new Date().toISOString();
         const job: Job = {
             id: randomUUID(), post_id: post.id, url: post.url, status: 'queued',
@@ -127,6 +138,7 @@ export class JobQueue {
             this.current = controller;
             const timer = setTimeout(() => controller.abort(new Error(`任务运行超过 ${config.job_timeout_ms / 60000} 分钟，已中止`)), config.job_timeout_ms);
             try {
+                this.check_disk_space();
                 const result = await this.runner(job, this.directory(job.id), async (progress: Progress) => {
                     record_progress(job, progress);
                     job.updated_at = new Date().toISOString();
@@ -152,7 +164,7 @@ export class JobQueue {
             } catch (error) {
                 job.status = 'failed';
                 job.error = error instanceof Error ? error.message : String(error);
-                job.failure_reason = error instanceof PostUnavailableError ? 'post_unavailable' : undefined;
+                job.failure_reason = error instanceof PostUnavailableError ? 'post_unavailable' : error instanceof DiskSpaceError ? 'disk_space' : undefined;
                 job.progress = { stage: '备份失败' };
                 await this.log('error', 'failed', error, job.id);
             } finally {

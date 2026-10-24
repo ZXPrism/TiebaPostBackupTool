@@ -4,6 +4,7 @@
   "base_path": "",
   "data_dir": ".data",
   "max_pending": 20,
+  "min_free_disk_bytes": 2147483648,
   "api_request_interval_ms": 1000,
   "image_request_interval_ms": 200,
   "image_concurrency": 5,
