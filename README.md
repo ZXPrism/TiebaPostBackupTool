@@ -1,6 +1,6 @@
 # Tieba Post Backup Tool
 
-![version](https://img.shields.io/badge/version-3.0.2-green)
+![version](https://img.shields.io/badge/version-3.0.3-green)
 
 [百度贴吧贴子备份工具-演示](https://www.bilibili.com/video/BV1A8NteREva/)
 

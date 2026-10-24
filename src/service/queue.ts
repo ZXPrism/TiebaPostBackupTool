@@ -42,7 +42,7 @@ export class JobQueue {
             try {
                 const job = JSON.parse(await readFile(join(this.root, name, 'job.json'), 'utf8')) as Job;
                 if (job.id !== name) { throw new Error('任务 ID 不匹配'); }
-                if (job.status === 'running') {
+                if (job.status === 'running' || job.status === 'queued') {
                     job.status = 'failed';
                     job.error = '服务在任务完成前停止，请重新提交';
                     job.updated_at = new Date().toISOString();

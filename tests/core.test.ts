@@ -281,6 +281,29 @@ test('queue serializes jobs, deduplicates pending posts, persists and recovers i
     await restored.close();
 });
 
+test('restart cancels persisted queued jobs without running them and records the interruption', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tieba-restart-'));
+    const id = '00000000-0000-4000-8000-000000000001';
+    await mkdir(join(root, id));
+    await writeFile(join(root, id, 'job.json'), JSON.stringify({ id, post_id: 123, status: 'queued' }));
+    let runs = 0;
+    const queue = new JobQueue(root, async () => {
+        runs++;
+        return { filename: 'test.tar', floor_count: 1, image_count: 0, warnings: [] };
+    });
+    try {
+        await queue.initialize();
+        assert.equal(queue.get(id)?.status, 'failed');
+        assert.equal(queue.get(id)?.error, '服务在任务完成前停止，请重新提交');
+        assert.equal(JSON.parse(await readFile(join(root, id, 'job.json'), 'utf8')).status, 'failed');
+        for (const path of [join(root, 'service.log'), join(root, id, 'job.log')]) {
+            const rows = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+            assert(rows.some(row => row.event === 'interrupted' && row.job_id === id));
+        }
+    } finally { await queue.close(); }
+    assert.equal(runs, 0);
+});
+
 test('URL time rule accepts only observed numeric avatar/profile timestamps and remains auditable', () => {
     const changed = JSON.parse(JSON.stringify(baseline).replace(/([?&]t=)\d+/g, '$19999999999')) as Post;
     for (const normalize_images of [false, true]) {
