@@ -395,3 +395,28 @@ test('short phases estimate after the first measured progress and show seconds',
     assert.equal(format_remaining_time(60), '约 1 分钟');
     assert.equal(format_remaining_time(3600), '约 1 小时');
 });
+
+test('viewer owner filter identifies accounts across display names and URL timestamps without filtering replies', () => {
+    const comment = (author: string, homepage_url?: string) => ({ author, homepage_url, date: '', content: 'body' });
+    const floor_list = [
+        { index: 1, comment: comment('楼主原名', 'https://tieba.baidu.com/home/main?id=owner?t=123&fr=pb') },
+        { index: 2, comment: comment('楼主改名', 'https://tieba.baidu.com/home/main?id=owner%3Ft%3D456&fr=pb'),
+            sub_comment_list: [comment('其他人', 'https://tieba.baidu.com/home/main?id=other')] },
+        { index: 3, comment: comment('楼主原名', 'https://tieba.baidu.com/home/main?id=other') },
+    ];
+    const data = (post: Post) => {
+        const match = create_viewer_html(post).match(/const post = (.+);/);
+        assert(match);
+        return JSON.parse(match[1]);
+    };
+    const post = { ...baseline, floor_list };
+    const embedded = data(post);
+    assert.deepEqual(embedded.owner_floor_indexes, [1, 2]);
+    assert.deepEqual(embedded.floor_list, floor_list);
+    assert.equal(embedded.floor_list[1].sub_comment_list[0].author, '其他人');
+    assert.deepEqual(data({ ...post, floor_list: [
+        { index: 1, comment: comment('旧备份楼主') }, { index: 2, comment: comment('别人') },
+        { index: 3, comment: comment('旧备份楼主') },
+    ] }).owner_floor_indexes, [1, 3]);
+    assert.deepEqual(data({ ...post, floor_list: [] }).owner_floor_indexes, []);
+});

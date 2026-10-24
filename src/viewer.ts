@@ -1,10 +1,23 @@
-import type { Post } from './types';
+import type { Comment, Post } from './types';
+
+function author_identity(comment: Comment): string {
+    try {
+        const params = new URL(comment.homepage_url || '').searchParams;
+        const id = params.get('id')?.split('?')[0];
+        if (id) { return `id:${id}`; }
+        if (params.get('un')) { return `un:${params.get('un')}`; }
+    } catch { /* Older backups may only contain display names. */ }
+    return `name:${comment.author}`;
+}
 
 /**
  * Create viewer HTML file.
  */
 export function create_viewer_html(post: Post, backup_date = new Date(post.backup_date ?? Date.now())): string {
-    const json_data = JSON.stringify({ floor_list: post.floor_list }).replace(/</g, '\\u003c');
+    const owner = post.floor_list.find(floor => floor.index === 1)?.comment;
+    const owner_floor_indexes = owner ? post.floor_list.filter(floor => author_identity(floor.comment) === author_identity(owner))
+        .map(floor => floor.index) : [];
+    const json_data = JSON.stringify({ floor_list: post.floor_list, owner_floor_indexes }).replace(/</g, '\\u003c');
     const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char);
     const post_url = `https://tieba.baidu.com/p/${post.id}`;
     const formatted_date = backup_date.toLocaleString('zh-CN', {
@@ -65,6 +78,9 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
             margin-bottom: 10px;
             overflow-wrap: anywhere;
         }
+        .header .view-options { margin-top: 12px; }
+        .owner-toggle { padding: 6px 10px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); cursor: pointer; }
+        .owner-toggle[aria-pressed="true"] { background: var(--text); color: var(--surface); }
         .pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
         .pagination button, .pagination input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); }
         .pagination button:disabled { color: var(--subtle); }
@@ -188,6 +204,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
             楼层: ${post.floor_list.length} |
             回复: ${post.comment_cnt}
         </div>
+        <div class="view-options"><button id="owner-toggle" class="owner-toggle" type="button" aria-pressed="false">只看楼主</button></div>
     </div>
     <nav class="pagination" aria-label="顶部翻页">
         <button type="button" data-step="-1">上一页</button>
@@ -351,11 +368,24 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
 
         const contentDiv = document.getElementById('content');
         const pageSize = 30;
-        const pageCount = Math.max(1, Math.ceil(post.floor_list.length / pageSize));
+        const ownerIndexes = new Set(post.owner_floor_indexes);
+        const ownerFloors = post.floor_list.filter(floor => ownerIndexes.has(floor.index));
+        const ownerButton = document.getElementById('owner-toggle');
+        let ownerOnly = false;
+        let visibleFloors = post.floor_list;
+        let pageCount = Math.max(1, Math.ceil(visibleFloors.length / pageSize));
         let page = 0;
+        ownerButton.addEventListener('click', () => {
+            ownerOnly = !ownerOnly;
+            ownerButton.textContent = ownerOnly ? '取消只看楼主' : '只看楼主';
+            ownerButton.setAttribute('aria-pressed', String(ownerOnly));
+            visibleFloors = ownerOnly ? ownerFloors : post.floor_list;
+            pageCount = Math.max(1, Math.ceil(visibleFloors.length / pageSize));
+            renderPage(0, false);
+        });
         function renderPage(nextPage, scroll = true) {
             page = Math.max(0, Math.min(pageCount - 1, nextPage));
-            const floors = post.floor_list.slice(page * pageSize, (page + 1) * pageSize);
+            const floors = visibleFloors.slice(page * pageSize, (page + 1) * pageSize);
             contentDiv.innerHTML = floors.map(renderFloor).join('');
             const range = floors.length ? ' · ' + floors[0].index + '–' + floors[floors.length - 1].index + ' 楼' : '';
             document.querySelectorAll('.page-status').forEach(el => {
