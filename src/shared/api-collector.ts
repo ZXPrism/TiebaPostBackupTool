@@ -35,6 +35,20 @@ function flag(value: unknown, field: string): boolean {
     if (number > 1) { throw new Error(`接口字段 ${field} 应为 0 或 1`); }
     return number === 1;
 }
+class LocatedContentError extends Error {}
+
+function content_error(error: unknown, floor: unknown, post: unknown, reply?: unknown): Error {
+    if (error instanceof LocatedContentError) { return error; }
+    const identifier = (value: unknown) => /^(?:[1-9][0-9]*)$/.test(String(value)) ? String(value) : '未知';
+    const location = `第 ${identifier(floor)} 楼（post_id=${identifier(post)}${reply === undefined ? '' : `，楼中楼 reply_id=${identifier(reply)}`}）`;
+    return new LocatedContentError(`${location}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+}
+
+function at_reply<T>(raw: RecordValue, floor: RecordValue, parse: () => T): T {
+    try { return parse(); }
+    catch (error) { throw content_error(error, floor.floor, floor.id, raw.id ?? '未知'); }
+}
+
 const escape = (value: string): string => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char);
 function link(value: unknown, field: string): string {
     const url = new URL(text(value, field));
@@ -42,7 +56,25 @@ function link(value: unknown, field: string): string {
     return escape(url.href);
 }
 
+// Legacy PC UeditorEmotion configuration: prefix + two-digit index, GIF images.
+// Source: https://tb1.bdstatic.com/tb/_/ueditor_emotion_a903913.js
+const legacy_emoticons = [
+    { prefix: 'b', count: 62, folder: 'qpx_n' },
+    { prefix: 't_00', count: 40, folder: 'tsj' },
+    { prefix: 'ali_0', count: 70, folder: 'ali' },
+    { prefix: 'llb_0', count: 60, folder: 'luoluobu' },
+    { prefix: 'bearchildren_', count: 60, folder: 'bearchildren' },
+    { prefix: 'B_00', count: 63, folder: 'bobo' },
+];
+
 function emoticon_url(name: string): string {
+    for (const { prefix, count, folder } of legacy_emoticons) {
+        if (!name.startsWith(prefix)) { continue; }
+        const index = name.slice(prefix.length);
+        if (/^\d{2}$/.test(index) && Number(index) >= 1 && Number(index) <= count) {
+            return `https://tb2.bdstatic.com/tb/editor/images/${folder}/${name}.gif`;
+        }
+    }
     if (name === 'image_emoticon') { return 'https://tb3.bdstatic.com/emoji/image_emoticon@2x.png'; }
     if (/^image_emoticon\d+$/.test(name)) {
         return `https://gsp0.baidu.com/5aAHeD3nKhI2p27j8IqW0jdnxx1xbK/tb/editor/images/client/${name}.png`;
@@ -86,6 +118,20 @@ export function render_api_content(value: unknown, note?: (message: string) => v
                 const dimensions = text(item.bsize, 'content.bsize').match(/^(\d+),(\d+)$/);
                 if (!dimensions) { throw new Error('接口图片 bsize 格式无效'); }
                 return `<img class="BDE_Image" src="${link(item.origin_src, 'content.origin_src')}" width="${dimensions[1]}" height="${dimensions[2]}">`;
+            }
+            case 11: {
+                const source = link(item.static, 'content.static');
+                const filename = new URL(text(item.static, 'content.static')).pathname.split('/').pop();
+                if (item.dynamic && item.dynamic !== filename) {
+                    throw new Error('尚未支持的接口表情包: type=11（动静态资源不同）');
+                }
+                return `<img class="BDE_Smiley" src="${source}" width="${integer(item.width, 'content.width', 1)}" height="${integer(item.height, 'content.height', 1)}">`;
+            }
+            case 5: {
+                // Legacy Flash players are obsolete and intentionally excluded from backups.
+                const resource = new URL(text(item.text, 'content.text'));
+                if (['http:', 'https:'].includes(resource.protocol) && /\.swf$/i.test(resource.pathname)) { return ''; }
+                throw new Error('尚未支持的接口媒体内容: type=5（非 Flash 资源）');
             }
             case 4: return `<a href="https://tieba.baidu.com/home/main?id=${encodeURIComponent(text(item.portrait, 'content.portrait'))}" class="at">${escape(text(item.text, 'content.text'))}</a>`;
             default: throw new Error(`尚未支持的接口正文类型: type=${type}，已停止采集以避免丢失内容`);
@@ -141,6 +187,8 @@ export async function collect_api(
     let metadata: Collection['metadata'] | undefined;
     let last_pid: number | undefined;
     let finished = false;
+    let has_fold_comment = false;
+    let found_fold_content = false;
     const collection: CollectionProgress = { pages: { current: 0, complete: false } };
     const report = (value: Omit<Progress, 'collection'>) => progress({
         ...value, collection: {
@@ -159,7 +207,8 @@ export async function collect_api(
         const page = object(result.page, 'page');
         if (integer(thread.id, 'thread.id', 1) !== post_id) { throw new Error('接口返回的贴子 ID 不匹配'); }
         if (flag(thread.is_partial_visible, 'thread.is_partial_visible')) { throw new Error('接口标记贴子仅部分内容可见，无法完整备份'); }
-        if (flag(result.has_fold_comment, 'has_fold_comment')) { throw new Error('接口标记存在折叠内容，当前采集器无法保证完整备份'); }
+        // The summary does not identify a floor or imply that its body is unavailable.
+        has_fold_comment = flag(result.has_fold_comment, 'has_fold_comment') || has_fold_comment;
         for (const value of array(result.user_list, 'user_list')) {
             const user = object(value, 'user');
             const id = integer(user.id, 'user.id', 1);
@@ -186,27 +235,32 @@ export async function collect_api(
         let previous_floor = 0;
         const previous_count = raw_floors.length;
         for (const post of batch) {
-            const id = integer(post.id, 'post.id', 1);
-            const floor = integer(post.floor, 'post.floor', 1);
-            if (batch_ids.has(id) || floor <= previous_floor) { throw new Error(`接口单次响应出现重复或乱序楼层: floor=${floor}, post_id=${id}`); }
-            batch_ids.add(id);
-            previous_floor = floor;
-            if (post.is_fold !== undefined && flag(post.is_fold, 'post.is_fold')) { throw new Error(`第 ${floor} 楼已折叠，无法完整备份`); }
-            // Live pages can overlap. Keep the version first collected without rescanning.
-            if (seen.has(id)) { continue; }
-            if (floor <= Number(raw_floors.at(-1)?.floor || 0)) { throw new Error(`接口出现乱序楼层: floor=${floor}, post_id=${id}`); }
-            // Detect unsupported content on receipt, before fetching later pages.
             try {
+                const id = integer(post.id, 'post.id', 1);
+                const floor = integer(post.floor, 'post.floor', 1);
+                if (batch_ids.has(id) || floor <= previous_floor) { throw new Error(`接口单次响应出现重复或乱序楼层: floor=${floor}, post_id=${id}`); }
+                batch_ids.add(id);
+                previous_floor = floor;
+                const folded = post.is_fold !== undefined && integer(post.is_fold, 'post.is_fold') > 0;
+                if (folded && array(post.content, 'content').length === 0) {
+                    throw new Error(`接口未返回折叠楼层的正文（is_fold=${post.is_fold}），无法获取展开后的内容`);
+                }
+                // Live pages can overlap. Keep the version first collected without rescanning.
+                if (seen.has(id)) { continue; }
+                if (floor <= Number(raw_floors.at(-1)?.floor || 0)) { throw new Error(`接口出现乱序楼层: floor=${floor}, post_id=${id}`); }
+                // Detect unsupported content on receipt, before fetching later pages.
                 render_api_content(post.content);
+                if (folded) { found_fold_content = true; }
                 if (post.sub_post_list) {
                     const embedded = array(object(post.sub_post_list, 'sub_post_list').sub_post_list, 'sub_post_list.sub_post_list');
-                    for (const reply of embedded) { render_api_content(object(reply, 'sub_post').content); }
+                    for (const value of embedded) {
+                        const reply = object(value, 'sub_post');
+                        at_reply(reply, post, () => render_api_content(reply.content));
+                    }
                 }
-            } catch (error) {
-                throw new Error(`第 ${floor} 楼: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
-            }
-            seen.add(id);
-            raw_floors.push(post);
+                seen.add(id);
+                raw_floors.push(post);
+            } catch (error) { throw content_error(error, post.floor, post.id); }
         }
         finished = !flag(page.has_more, 'page.has_more');
         collection.pages = { current: number, total: finished ? number : Math.max(total, number + 1), complete: finished };
@@ -217,7 +271,10 @@ export async function collect_api(
         last_pid = integer(posts[posts.length - 1].id, 'last_pid', 1);
     }
     if (!finished || !metadata) { throw new Error(`接口分页未结束，已达到 ${max_pages} 页限制`); }
-    let remaining_replies = raw_floors.reduce((sum, raw) => sum + integer(raw.sub_post_number, `第 ${raw.floor} 楼 sub_post_number`), 0);
+    if (has_fold_comment && !found_fold_content) {
+        throw new Error('接口标记存在折叠内容，但遍历楼层后未返回具体折叠楼层，无法定位楼层及完整备份');
+    }
+    let remaining_replies = raw_floors.reduce((sum, raw) => sum + integer(raw.sub_post_number, `第 ${raw.floor} 楼（post_id=${raw.id}）sub_post_number`), 0);
     let completed_replies = 0;
     collection.replies = { current: 0, total: remaining_replies, complete: false };
     await report({ stage: '采集楼中楼' });
@@ -242,19 +299,23 @@ export async function collect_api(
                     await report({ stage: `采集第 ${index} 楼的楼中楼`, current: replies.length, total: Math.max(count, replies.length + 1) });
                     const result = object(await request('/c/f/pb/nestedFloor', { thread_id: String(post_id), post_id: String(raw.id), offset: String(offset) }), 'nestedFloor');
                     const page = object(result.page, 'nestedFloor.page');
-                    const batch = array(result.post_list, 'nestedFloor.post_list').map(value => object(value, 'sub_post'));
+                    done = !flag(page.has_more, 'nestedFloor.page.has_more');
+                    // An empty final page can omit post_list entirely (observed on live nested replies).
+                    const batch = array(result.post_list === undefined && done ? [] : result.post_list, 'nestedFloor.post_list')
+                        .map(value => object(value, 'sub_post'));
                     const batch_ids = new Set<number>();
                     for (const reply of batch) {
-                        const id = integer(reply.id, 'sub_post.id', 1);
-                        if (batch_ids.has(id)) { throw new Error('楼中楼单次响应存在重复回复 ID'); }
-                        batch_ids.add(id);
-                        if (!reply_ids.has(id)) {
-                            render_api_content(reply.content);
-                            reply_ids.add(id);
-                            replies.push(reply);
-                        }
+                        at_reply(reply, raw, () => {
+                            const id = integer(reply.id, 'sub_post.id', 1);
+                            if (batch_ids.has(id)) { throw new Error('楼中楼单次响应存在重复回复 ID'); }
+                            batch_ids.add(id);
+                            if (!reply_ids.has(id)) {
+                                render_api_content(reply.content);
+                                reply_ids.add(id);
+                                replies.push(reply);
+                            }
+                        });
                     }
-                    done = !flag(page.has_more, 'nestedFloor.page.has_more');
                     collection.replies = { current: completed_replies + replies.length,
                         total: completed_replies + remaining_replies + (done ? replies.length : Math.max(count, replies.length + 1)), complete: false };
                     await report({ stage: `采集第 ${index} 楼的楼中楼`, current: replies.length, total: done ? replies.length : Math.max(count, replies.length + 1) });
@@ -268,13 +329,13 @@ export async function collect_api(
             if (new Set(replies.map(reply => integer(reply.id, 'sub_post.id', 1))).size !== replies.length) { throw new Error('楼中楼存在重复回复 ID'); }
             const note = (message: string) => { notes.push(`第 ${index} 楼: ${message}`); };
             floors.push({ index, comment: comment(raw, users, false, note), ...(replies.length ? {
-                sub_comment_list: replies.map(reply => comment(reply, users, true,
-                    message => note(`楼中楼回复 ${reply.id}: ${message}`))),
+                sub_comment_list: replies.map(reply => at_reply(reply, raw, () => comment(reply, users, true,
+                    message => note(`楼中楼回复 ${reply.id}: ${message}`)))),
             } : {}) });
             completed_replies += replies.length;
         } catch (error) {
             if (signal.aborted) { signal.throwIfAborted(); }
-            throw new Error(`第 ${index} 楼: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+            throw content_error(error, index, raw.id);
         }
     }
     collection.replies = { current: completed_replies, total: completed_replies, complete: true };

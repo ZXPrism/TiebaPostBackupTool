@@ -153,6 +153,49 @@ test('recorded unnumbered emoticon survives floor/reply collection and offline i
     }
 });
 
+test('legacy bubble bear emoticons survive nested collection and offline GIF mapping', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-qpx-emoticon.json', 'utf8'));
+    const url = 'https://tb2.bdstatic.com/tb/editor/images/qpx_n/b32.gif';
+    const records = structuredClone(fixtures);
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    const filename = post.image_map?.[url];
+    assert(filename?.endsWith('.gif'));
+    const reply = post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0];
+    assert.equal(reply?.content, render_api_content(content).replaceAll(url, `./images/${filename}`));
+    assert.equal((reply?.content.match(/<img /g) ?? []).length, 3);
+    for (let id = 1; id <= 62; id++) {
+        const name = `b${String(id).padStart(2, '0')}`;
+        assert(render_api_content([{ type: 2, text: name }]).includes(`/qpx_n/${name}.gif`));
+    }
+    for (const name of ['b00', 'b63', 'b1', 'b032', 'B32', 'b32.gif', 'b32/../x']) {
+        assert.throws(() => render_api_content([{ type: 2, text: name }]), /尚未支持/);
+    }
+});
+
+test('other recorded legacy emoji packs retain their original resources', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-legacy-emoticons.json', 'utf8'));
+    const html = render_api_content(content);
+    for (const [name, path] of [
+        ['t_0001', 'tsj/t_0001.gif'], ['ali_047', 'ali/ali_047.gif'],
+        ['llb_009', 'luoluobu/llb_009.gif'], ['bearchildren_20', 'bearchildren/bearchildren_20.gif'],
+        ['B_0037', 'bobo/B_0037.gif'],
+    ]) {
+        assert(html.includes(path), name);
+    }
+    const sticker = content.find((item: { type: number }) => item.type === 11);
+    assert(html.includes(`src="${sticker.static}" width="240" height="240"`));
+    assert.equal((html.match(/<img /g) ?? []).length, content.length);
+    for (const name of ['t_0000', 't_0041', 'ali_071', 'llb_061', 'bearchildren_61', 'B_0064']) {
+        assert.throws(() => render_api_content([{ type: 2, text: name }]), /尚未支持/);
+    }
+    assert.throws(() => render_api_content([{ ...sticker, static: 'javascript:alert(1)' }]), /不是 HTTP/);
+    assert.throws(() => render_api_content([{ ...sticker, width: 0 }]), /content.width/);
+    assert.throws(() => render_api_content([{ ...sticker, dynamic: 'different.gif' }]), /动静态资源不同/);
+});
+
 test('recorded Shoubai emoticon is preserved as an offline WebP image', async () => {
     const { content } = JSON.parse(await readFile('tests/regression/api-shoubai-emoticon.json', 'utf8'));
     const url = 'https://tb3.bdstatic.com/shoubai_emoji/shoubai_emoji_face_04.webp';
@@ -304,7 +347,7 @@ test('API accepts a final page emptied by deletions', async () => {
 });
 
 test('API follows nested pagination despite additions, deletions and overlapping replies', async () => {
-    for (const scenario of ['added', 'deleted', 'empty', 'overlap']) {
+    for (const scenario of ['added', 'deleted', 'omitted', 'empty', 'overlap']) {
         const records = structuredClone(fixtures);
         const pages = records.filter(f => f.parameters.post_id === '54651409834');
         const first = pages[0].response.data as Record<string, unknown>;
@@ -317,6 +360,8 @@ test('API follows nested pagination despite additions, deletions and overlapping
             second_replies.push({ ...structuredClone(second_replies[second_replies.length - 1]), id: 999999999999, content: [{ type: 0, text: 'new reply' }] });
         } else if (scenario === 'deleted') {
             second.post_list = [];
+        } else if (scenario === 'omitted') {
+            delete second.post_list;
         } else if (scenario === 'empty') {
             first.post_list = [];
             first.page = { has_more: 0, offset: 0 };
@@ -326,7 +371,7 @@ test('API follows nested pagination despite additions, deletions and overlapping
         const { request, calls } = replay(records);
         const result = await collect_api(baseline.id, request, progress, signal);
         const replies = result.floors.find(f => f.index === 21)?.sub_comment_list || [];
-        assert.equal(replies.length, { added: 19, deleted: 10, empty: 0, overlap: 18 }[scenario]);
+        assert.equal(replies.length, { added: 19, deleted: 10, omitted: 10, empty: 0, overlap: 18 }[scenario]);
         assert.equal(calls.length, scenario === 'empty' ? 4 : 5);
         if (scenario === 'added') { assert.equal(replies.at(-1)?.content, 'new reply'); }
         if (scenario === 'overlap') { assert.equal(replies[9].content, original_content); }
@@ -337,6 +382,10 @@ test('API follows nested pagination despite additions, deletions and overlapping
 test('API refuses stalled pagination, inconsistent individual responses, hidden or unknown data', async () => {
     for (const [change, pattern] of [
         [(r: typeof fixtures) => { r[0].response.post_list = []; }, /还有下一页.*列表为空/],
+        [(r: typeof fixtures) => {
+            const data = r[2].response.data as Record<string, unknown>;
+            delete data.post_list;
+        }, /nestedFloor.post_list/],
         [(r: typeof fixtures) => {
             r[1].response.post_list = r[0].response.post_list;
             (r[1].response.page as Record<string, unknown>).has_more = 1;
@@ -910,4 +959,114 @@ test('unavailable post failure survives reload and stays distinct from generic f
         server.closeAllConnections();
         await new Promise<void>(resolve => server.close(() => resolve()));
     }
+});
+
+test('fold summary does not hide content errors and the exact floor is persisted in failure logs', async () => {
+    const records = structuredClone(fixtures);
+    records[0].response.has_fold_comment = 1;
+    const folded = (records[1].response.post_list as Record<string, unknown>[])[0];
+    folded.is_fold = 2;
+    folded.content = [{ type: 99 }];
+    const { request, calls } = replay(records);
+    const root = await mkdtemp(join(tmpdir(), 'tieba-fold-log-'));
+    const queue = new JobQueue(root, async () => {
+        await collect_api(baseline.id, request, progress, signal);
+        throw new Error('A folded floor must not produce a successful backup');
+    });
+    try {
+        await queue.initialize();
+        const job = await queue.submit(String(baseline.id));
+        const deadline = Date.now() + 3000;
+        while (job.status !== 'failed' && Date.now() < deadline) { await new Promise(resolve => setTimeout(resolve, 10)); }
+        assert.equal(job.status, 'failed');
+        assert.equal(calls.length, 2, 'Continue past the summary but stop immediately at the folded floor');
+        await queue.close();
+        for (const path of [join(root, 'service.log'), join(root, job.id, 'job.log')]) {
+            const rows = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+            const failed = rows.find(row => row.event === 'failed');
+            assert(failed);
+            assert(failed.detail.message.includes(`第 ${folded.floor} 楼`));
+            assert(failed.detail.message.includes(`post_id=${folded.id}`));
+            assert(failed.detail.message.includes('type=99'));
+        }
+        const saved = JSON.parse(await readFile(join(root, job.id, 'job.json'), 'utf8'));
+        assert.equal(saved.error, job.error);
+    } finally { await queue.close(); }
+});
+
+test('content and author failures identify the main floor and the exact nested reply', async () => {
+    for (const scenario of ['embedded', 'nested', 'nested_author', 'floor_author']) {
+        const records = structuredClone(fixtures);
+        const first = records[0].response.first_floor as Record<string, unknown>;
+        let floor = first.floor, post = first.id, reply: unknown;
+        if (scenario === 'embedded') {
+            reply = 123456789;
+            first.sub_post_list = { sub_post_list: [{ id: reply, content: [{ type: 99 }] }] };
+        } else if (scenario === 'floor_author') {
+            first.author_id = 999999999;
+        } else {
+            const data = records[2].response.data as Record<string, unknown>;
+            const nested = (data.post_list as Record<string, unknown>[])[0];
+            post = records[2].parameters.post_id;
+            floor = 21; reply = nested.id;
+            if (scenario === 'nested') { nested.content = [{ type: 99 }]; }
+            else { nested.author = { id: -1 }; }
+        }
+        await assert.rejects(collect_api(baseline.id, replay(records).request, progress, signal), error => {
+            assert(error instanceof Error);
+            assert(error.message.includes(`第 ${floor} 楼`), error.message);
+            assert(error.message.includes(`post_id=${post}`), error.message);
+            if (reply !== undefined) { assert(error.message.includes(`reply_id=${reply}`), error.message); }
+            assert.equal((error.message.match(/第 \d+ 楼/g) || []).length, 1, 'Do not duplicate location when wrapping nested errors');
+            return true;
+        });
+    }
+});
+
+
+test('folded floors with visible bodies are collected normally, including the observed is_fold=2 link', async () => {
+    for (const fold of [1, 2]) {
+        const records = structuredClone(fixtures);
+        records[0].response.has_fold_comment = 1;
+        const post = (records[1].response.post_list as Record<string, unknown>[])[0];
+        post.is_fold = fold;
+        // Actual body shape observed on thread 3691190214, floor 867. Keep Baidu's masked label.
+        post.content = [{ type: 1, text: 'http://vip.ni****8.club/bbs-3683466.htm',
+            link: 'https://tieba.baidu.com/mo/q/checkurl?url=http%3A%2F%2Fvip.ni%2A%2A%2A%2A8.club%2Fbbs-3683466.htm&urlrefer=2522340a0fc3b53541865b8751269d52' }];
+        const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+        const floor = result.floors.find(f => f.index === Number(post.floor));
+        assert(floor);
+        assert.equal(floor.comment.content, render_api_content(post.content));
+        assert.deepEqual(result.warnings, []);
+        assert.equal(result.floors.length, baseline.floor_list.length);
+    }
+});
+
+test('missing folded body fails with its exact floor instead of silently omitting content', async () => {
+    const records = structuredClone(fixtures);
+    const first = records[0].response.first_floor as Record<string, unknown>;
+    first.is_fold = 2;
+    first.content = [];
+    await assert.rejects(collect_api(baseline.id, replay(records).request, progress, signal), error => {
+        assert(error instanceof Error);
+        assert(error.message.includes(`第 1 楼（post_id=${first.id}）`));
+        assert.match(error.message, /未返回折叠楼层的正文/);
+        return true;
+    });
+});
+
+
+test('obsolete Flash players are ignored without losing adjacent text or accepting other media', async () => {
+    const player = { type: 5, text: 'http://box.baidu.com/widget/flash/bdspacesong.swf?from=tieba&url=&name=&artist=&song_id=2342867&extra=&autoPlay=false&loop=true' };
+    const content = [{ type: 0, text: '水墨丹青 - 李玉刚\n' }, player, { type: 0, text: '下一段' }];
+    assert.equal(render_api_content(content), '水墨丹青 - 李玉刚<br>下一段');
+    assert.equal(render_api_content([player]), '');
+    for (const text of ['https://example.com/movie.mp4', 'javascript:alert(1)', 'https://example.com/movie.swf.html']) {
+        assert.throws(() => render_api_content([{ type: 5, text }]), /type=5/);
+    }
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    assert.equal(result.floors[0].comment.content, '水墨丹青 - 李玉刚<br>下一段');
+    assert.deepEqual(result.warnings, []);
 });
