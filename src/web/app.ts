@@ -231,7 +231,9 @@ function render(result: PostBackups): void {
     element('failure-message').textContent = result.failure_reason === 'post_unavailable'
         ? '贴子无法访问，可能已被删除。请检查贴子链接或 ID。'
         : result.failure_reason === 'disk_space' ? '服务器磁盘空间不足，暂时无法开始备份'
-            : '未能完成备份，未生成新的备份结果。';
+            : result.failure_reason === 'traffic_limit' ? '服务器日流量已达限额'
+                : result.failure_reason === 'traffic_unavailable' ? '暂时无法核实服务器流量，请稍后再试'
+                    : '未能完成备份，未生成新的备份结果。';
     if (show_failure) { notify(''); }
     render_active(show_failure ? undefined : result.active);
     const encoded = JSON.stringify(result.backups);
@@ -252,7 +254,7 @@ function render(result: PostBackups): void {
         const button = node('button', '下载备份');
         button.addEventListener('click', () => {
             button.disabled = true;
-            void download(backup).catch(() => notify('暂时无法下载，请稍后再试', true))
+            void download(backup).catch(error => notify(error.message || '暂时无法下载，请稍后再试', true))
                 .finally(() => { button.disabled = false; });
         });
         actions.append(button);

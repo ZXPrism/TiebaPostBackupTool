@@ -1,3 +1,4 @@
+import type { TrafficGate } from './traffic';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
@@ -14,6 +15,7 @@ export interface StoredArchive {
     prefix: string;
 }
 export interface ArchiveStore {
+    readonly traffic?: TrafficGate;
     publish(id: string, directory: string, filename: string, progress: (value: Progress) => Promise<void>, signal: AbortSignal): Promise<StoredArchive>;
     url(archive: StoredArchive, encoding: Representation, method: 'GET' | 'HEAD'): Promise<string>;
 }
@@ -36,7 +38,7 @@ function storage_error(action: string, error: unknown): Error {
 
 export class CosArchiveStore implements ArchiveStore {
     private readonly client: COS;
-    constructor(private readonly options: CosConfig, client?: COS) {
+    constructor(private readonly options: CosConfig, client?: COS, readonly traffic?: TrafficGate) {
         this.client = client ?? new COS({ SecretId: options.secret_id, SecretKey: options.secret_key,
             Protocol: 'https:', UploadCheckContentMd5: true, FileParallelLimit: 1, ChunkParallelLimit: config.cos.upload_concurrency,
             ChunkRetryTimes: config.cos.max_retries, Timeout: config.cos.request_timeout_ms });
@@ -106,9 +108,11 @@ export class CosArchiveStore implements ArchiveStore {
     }
 
     async url(archive: StoredArchive, encoding: Representation, method: 'GET' | 'HEAD'): Promise<string> {
+        await this.traffic?.check();
+        const expires = this.traffic?.expires_seconds(config.cos.signed_url_expires_seconds) ?? config.cos.signed_url_expires_seconds;
         return new Promise((resolve, reject) => {
             this.client.getObjectUrl({ Bucket: archive.bucket, Region: archive.region,
-                Key: `${archive.prefix}/${encoding}`, Method: method as COS.GetObjectUrlParams['Method'], Sign: true, Expires: config.cos.signed_url_expires_seconds, Protocol: 'https:' },
+                Key: `${archive.prefix}/${encoding}`, Method: method as COS.GetObjectUrlParams['Method'], Sign: true, Expires: expires, Protocol: 'https:' },
             (error, data) => error ? reject(storage_error('生成下载链接', error)) : resolve(data.Url));
         });
     }

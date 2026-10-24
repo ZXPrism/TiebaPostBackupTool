@@ -5,13 +5,19 @@ import { JobQueue } from './queue';
 import { create_runner } from './worker';
 import { create_app } from './http';
 import { cos_config, CosArchiveStore } from './storage';
+import { create_traffic_gate } from './traffic';
+import { ServiceLogger } from './logging';
 import { load_cookie } from './session';
 
 await mkdir(data_dir, { recursive: true, mode: 0o700 });
 let storage: CosArchiveStore | undefined;
 try {
     const options = cos_config();
-    if (options) { storage = new CosArchiveStore(options); }
+    if (options) {
+        const logger = new ServiceLogger(jobs_dir);
+        const traffic = create_traffic_gate(options, config.cos, (level, event, detail) => logger.write(level, event, detail));
+        storage = new CosArchiveStore(options, undefined, traffic);
+    }
 } catch (error) {
     console.error(`服务启动失败：${(error as Error).message}`);
     process.exit(1);

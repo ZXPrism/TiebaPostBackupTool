@@ -21,6 +21,8 @@
     "request_timeout_ms": 60000,
     "max_retries": 3,
     "upload_concurrency": 2,
-    "signed_url_expires_seconds": 900
+    "signed_url_expires_seconds": 900,
+    "daily_traffic_limit_bytes": 1000000000,
+    "traffic_check_interval_ms": 300000
   }
 }

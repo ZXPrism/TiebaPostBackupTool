@@ -1,3 +1,4 @@
+import { TrafficLimitError, TrafficUnavailableError } from './traffic';
 import { PostUnavailableError } from './api';
 import { statfsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -80,6 +81,10 @@ export class JobQueue {
     async submit(input: unknown): Promise<Job> {
         if (this.stopped) { throw new Error('服务正在停止'); }
         const post = parse_post_url(input);
+        const previous = this.list().find(job => job.post_id === post.id && ['queued', 'running'].includes(job.status));
+        if (previous) { return previous; }
+        await this.storage?.traffic?.check();
+        if (this.stopped) { throw new Error('服务正在停止'); }
         const pending = this.list().filter(job => job.status === 'queued' || job.status === 'running');
         const existing = pending.find(job => job.post_id === post.id);
         if (existing) {
@@ -130,15 +135,17 @@ export class JobQueue {
             const job = [...this.jobs.values()].filter(item => item.status === 'queued')
                 .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
             if (!job) { return; }
-            job.status = 'running';
-            job.updated_at = new Date().toISOString();
-            await this.save(job);
-            await this.log('info', 'started', { post_id: job.post_id }, job.id);
             const controller = new AbortController();
             this.current = controller;
             const timer = setTimeout(() => controller.abort(new Error(`任务运行超过 ${config.job_timeout_ms / 60000} 分钟，已中止`)), config.job_timeout_ms);
             try {
+                await this.storage?.traffic?.check();
+                controller.signal.throwIfAborted();
                 this.check_disk_space();
+                job.status = 'running';
+                job.updated_at = new Date().toISOString();
+                await this.save(job);
+                await this.log('info', 'started', { post_id: job.post_id }, job.id);
                 const result = await this.runner(job, this.directory(job.id), async (progress: Progress) => {
                     record_progress(job, progress);
                     job.updated_at = new Date().toISOString();
@@ -164,7 +171,8 @@ export class JobQueue {
             } catch (error) {
                 job.status = 'failed';
                 job.error = error instanceof Error ? error.message : String(error);
-                job.failure_reason = error instanceof PostUnavailableError ? 'post_unavailable' : error instanceof DiskSpaceError ? 'disk_space' : undefined;
+                job.failure_reason = error instanceof PostUnavailableError ? 'post_unavailable' : error instanceof DiskSpaceError ? 'disk_space'
+                    : error instanceof TrafficLimitError ? 'traffic_limit' : error instanceof TrafficUnavailableError ? 'traffic_unavailable' : undefined;
                 job.progress = { stage: '备份失败' };
                 await this.log('error', 'failed', error, job.id);
             } finally {

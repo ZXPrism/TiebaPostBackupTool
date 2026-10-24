@@ -18,6 +18,8 @@ export interface ServiceConfig {
     max_api_pages: number;
     job_timeout_ms: number;
     cos: {
+        daily_traffic_limit_bytes: number;
+        traffic_check_interval_ms: number;
         enabled: boolean;
         bucket: string;
         region: string;
@@ -65,6 +67,7 @@ export function load_config(path: string): ServiceConfig {
         cos: v => !!v && typeof v === 'object' && !Array.isArray(v),
     }, 'config');
     fields(value.cos, {
+        daily_traffic_limit_bytes: integer(1), traffic_check_interval_ms: integer(1000, 2147483647),
         enabled: v => typeof v === 'boolean', bucket: text, region: text,
         request_timeout_ms: integer(1, 2147483647), max_retries: integer(0),
         upload_concurrency: integer(1), signed_url_expires_seconds: integer(1, 604800),

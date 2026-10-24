@@ -1,3 +1,4 @@
+import { TrafficLimitError, TrafficUnavailableError } from './traffic';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -61,7 +62,8 @@ export function create_app(queue: JobQueue, base_path = config.base_path) {
         void handle(request, response).catch(async error => {
             await queue.log('error', 'http_error', { method: request.method, path: request.url?.split('?')[0], error });
             if (!response.headersSent) {
-                json(response, 500, { error: '暂时无法完成请求，请稍后再试' });
+                const known = error instanceof TrafficLimitError || error instanceof TrafficUnavailableError;
+                json(response, known ? 503 : 500, { error: known ? error.message : '暂时无法完成请求，请稍后再试' });
             } else { response.destroy(); }
         });
     });
@@ -103,7 +105,7 @@ export function create_app(queue: JobQueue, base_path = config.base_path) {
                     json(response, 202, post_backups(queue, post));
                 } catch (error) {
                     await queue.log('error', 'submit_failed', { post_id: post.id, error });
-                    json(response, 503, { error: error instanceof QueueFullError || error instanceof DiskSpaceError ? error.message : '暂时无法开始备份，请稍后再试' });
+                    json(response, 503, { error: error instanceof QueueFullError || error instanceof DiskSpaceError || error instanceof TrafficLimitError || error instanceof TrafficUnavailableError ? error.message : '暂时无法开始备份，请稍后再试' });
                 }
                 return;
             }
@@ -121,6 +123,7 @@ export function create_app(queue: JobQueue, base_path = config.base_path) {
                     })) };
                     json(response, 200, snapshot); return;
                 }
+                await queue.storage?.traffic?.check();
                 if (match[2] === 'download-url') {
                     const encoding = negotiate_encoding(request.headers['accept-encoding']);
                     if (!encoding) { json(response, 406, { error: '不支持请求指定的传输编码' }); return; }
