@@ -10,6 +10,10 @@ import { ServiceLogger, type LogLevel } from './logging';
 import { remove_local_archive, type ArchiveStore } from './storage';
 import { record_progress } from './progress';
 
+export class QueueFullError extends Error {
+    constructor() { super('任务队列已满，请稍后再试'); }
+}
+
 /** A single worker with durable job records. Interrupted jobs are never reported as complete. */
 export class JobQueue {
     private readonly jobs = new Map<string, Job>();
@@ -72,7 +76,7 @@ export class JobQueue {
             await this.log('debug', 'reused_pending_job', { post_id: post.id }, existing.id);
             return existing;
         }
-        if (pending.length >= config.max_pending) { throw new Error('任务队列已满，请稍后再试'); }
+        if (pending.length >= config.max_pending) { throw new QueueFullError(); }
         const now = new Date().toISOString();
         const job: Job = {
             id: randomUUID(), post_id: post.id, url: post.url, status: 'queued',

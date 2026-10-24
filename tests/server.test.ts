@@ -183,3 +183,41 @@ test('configured base paths cover redirects, assets, queries, submissions, snaps
         }
     }
 });
+
+test('full queue exposes its actionable message but other submission failures stay generic', async () => {
+    const { JobQueue } = await import('../src/service/queue');
+    const { create_app } = await import('../src/service/http');
+    const { config } = await import('../src/service/config');
+    const root = await mkdtemp(join(tmpdir(), 'tieba-full-queue-'));
+    const queue = new JobQueue(root, async (_job, _directory, _progress, signal) => {
+        await new Promise<void>((_resolve, reject) => {
+            signal.throwIfAborted();
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+        throw new Error('unreachable');
+    });
+    await queue.initialize();
+    const server = create_app(queue);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address !== 'string');
+    const origin = `http://127.0.0.1:${address.port}`;
+    const submit = (id: number) => fetch(origin + '/api/jobs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ url: String(id) }),
+    });
+    try {
+        for (let id = 1; id <= config.max_pending; id++) { assert.equal((await submit(id)).status, 202); }
+        const full = await submit(config.max_pending + 1);
+        assert.equal(full.status, 503);
+        assert.deepEqual(await full.json(), { error: '任务队列已满，请稍后再试' });
+        assert.equal((await submit(1)).status, 202, 'An existing task can still be reused');
+        await queue.close();
+        const stopped = await submit(config.max_pending + 1);
+        assert.equal(stopped.status, 503);
+        assert.deepEqual(await stopped.json(), { error: '暂时无法开始备份，请稍后再试' });
+    } finally {
+        await queue.close();
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+});
