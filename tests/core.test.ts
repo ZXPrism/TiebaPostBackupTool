@@ -11,6 +11,7 @@ import { compare_posts, regression_report } from '../src/shared/regression';
 import { finalize_post } from '../src/shared/post';
 import { ImageHandler } from '../src/image_handler';
 import { parse_post_url, type Job } from '../src/service/model';
+import { format_remaining_time } from '../src/shared/progress';
 import { active_backup, record_progress } from '../src/service/progress';
 import { allowed_url } from '../src/service/resource-url';
 import { JobQueue } from '../src/service/queue';
@@ -23,10 +24,10 @@ test('phase time estimates survive serialization and include stalls, retries and
         created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString(), progress: { stage: '排队中' }, warnings: [] };
     const pages = (current: number, total = 100) => ({ stage: '采集贴子',
         collection: { pages: { current, total, complete: false } } });
-    // Time spent queued or starting a browser is not counted as processing time.
+    // Time spent queued is not counted as processing time.
     record_progress(job, pages(0), 60000);
     record_progress(job, pages(5), 65000);
-    assert.equal(active_backup(job, 65000).remaining_seconds, undefined);
+    assert.equal(active_backup(job, 65000).remaining_seconds, 95);
     record_progress(job, pages(10), 70000);
     assert.equal(active_backup(job, 70000).remaining_seconds, 90);
     assert.equal(active_backup(JSON.parse(JSON.stringify(job)), 70000).remaining_seconds, 90);
@@ -350,4 +351,24 @@ test('disk threshold rejects new submissions and queued work without interruptin
         await queue.close();
         config.min_free_disk_bytes = original;
     }
+});
+
+
+test('short phases estimate after the first measured progress and show seconds', () => {
+    const job: Job = { id: 'short', post_id: 123, url: 'https://tieba.baidu.com/p/123', status: 'running',
+        created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString(), progress: { stage: '排队中' }, warnings: [] };
+    record_progress(job, { stage: '下载图片', current: 0, total: 5 }, 1000);
+    assert.equal(active_backup(job, 1000).remaining_seconds, undefined);
+    record_progress(job, { stage: '下载图片', current: 1, total: 5 }, 1000);
+    assert.equal(active_backup(job, 1000).remaining_seconds, undefined, 'No estimate with zero elapsed time');
+    record_progress(job, { stage: '下载图片', current: 2, total: 5 }, 2000);
+    assert.equal(active_backup(job, 2000).remaining_seconds, 2);
+    assert.equal(format_remaining_time(active_backup(job, 2000).remaining_seconds ?? 0), '约 2 秒');
+    record_progress(job, { stage: '上传备份', current: 0, total: 1000 }, 3000);
+    assert.equal(active_backup(job, 3000).remaining_seconds, undefined, 'New phase needs its own sample');
+    record_progress(job, { stage: '上传备份', current: 100, total: 1000 }, 3500);
+    assert.equal(active_backup(job, 3500).remaining_seconds, 5);
+    assert.equal(format_remaining_time(59), '约 59 秒');
+    assert.equal(format_remaining_time(60), '约 1 分钟');
+    assert.equal(format_remaining_time(3600), '约 1 小时');
 });

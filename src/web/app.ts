@@ -1,5 +1,5 @@
 import type { ActiveBackup, BackupSummary, PostBackups, Snapshot } from '../shared/service-contract';
-import type { ProgressCount } from '../shared/progress';
+import { format_remaining_time, type ProgressCount } from '../shared/progress';
 
 function element<T extends HTMLElement>(id: string): T {
     const value = document.getElementById(id);
@@ -174,12 +174,10 @@ function render_active(active?: ActiveBackup): void {
         : `${count.current} / ${count.complete || ['images', 'uploading'].includes(active.phase) ? '' : '约 '}${count.total} ${unit}${count.complete ? ' · 已完成' : ''}`;
     update(1, active.status === 'queued' ? { current: 0, total: 1, complete: false } : count);
     const seconds = active.remaining_seconds;
-    const minutes = Math.ceil((seconds ?? 0) / 60);
     progress_view.estimate.hidden = active.status === 'queued' || count?.complete === true;
     progress_view.estimate.textContent = `本阶段预计剩余：${seconds === undefined
         ? active.phase === 'packaging' ? '暂无法估算' : '估算中…'
-        : seconds < 60 ? '不足 1 分钟' : minutes < 60 ? `约 ${minutes} 分钟`
-        : `约 ${Math.floor(minutes / 60)} 小时${minutes % 60 ? ` ${minutes % 60} 分钟` : ''}`}`;
+        : format_remaining_time(seconds)}`;
 }
 
 /** Parse in an inert template and insert only text; no image or other resource enters the document. */

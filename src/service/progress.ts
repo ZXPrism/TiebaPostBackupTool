@@ -42,7 +42,7 @@ export function active_backup(job: Job, now = Date.now()): ActiveBackup {
     const processed = progress.current - timing.initial_current;
     const remaining = progress.total - progress.current;
     // Include waits/retries and time since the last update. A stalled job must not count down to zero.
-    if (elapsed >= 10000 && processed > 0 && remaining > 0) {
+    if (elapsed > 0 && processed > 0 && remaining > 0) {
         result.remaining_seconds = Math.ceil(remaining * elapsed / processed / 1000);
     }
     return result;
