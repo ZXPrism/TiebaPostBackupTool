@@ -82,6 +82,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
         .owner-toggle { padding: 6px 10px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); cursor: pointer; }
         .owner-toggle[aria-pressed="true"] { background: var(--text); color: var(--surface); }
         .pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+        .pagination[hidden] { display: none; }
         .pagination button, .pagination input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); }
         .pagination button:disabled { color: var(--subtle); }
         .pagination input { width: 65px; }
@@ -206,7 +207,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
         </div>
         <div class="view-options"><button id="owner-toggle" class="owner-toggle" type="button" aria-pressed="false">只看楼主</button></div>
     </div>
-    <nav class="pagination" aria-label="顶部翻页">
+    <nav class="pagination main-pagination" aria-label="顶部翻页" hidden>
         <button type="button" data-step="-1">上一页</button>
         <span class="page-status" aria-live="polite"></span>
         <button type="button" data-step="1">下一页</button>
@@ -214,7 +215,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
         <button type="button" data-jump>跳转</button>
     </nav>
     <div id="content"></div>
-    <nav class="pagination" aria-label="底部翻页">
+    <nav class="pagination main-pagination" aria-label="底部翻页" hidden>
         <button type="button" data-step="-1">上一页</button>
         <span class="page-status" aria-live="polite"></span>
         <button type="button" data-step="1">下一页</button>
@@ -301,11 +302,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
 
             // Sub-comments
             if (floor.sub_comment_list && floor.sub_comment_list.length > 0) {
-                html += '<div class="sub-comments">';
-                floor.sub_comment_list.forEach(sub => {
-                    html += renderSubComment(sub);
-                });
-                html += '</div>';
+                html += '<div class="sub-comments" data-floor="' + escapeText(floor.index) + '">' + renderReplies(floor) + '</div>';
             }
 
             html += '</div>';
@@ -366,7 +363,47 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
             return html;
         }
 
+        const replyPageSize = 10;
+        const replyPages = new Map();
+        const floorsByIndex = new Map(post.floor_list.map(floor => [String(floor.index), floor]));
+        function renderReplies(floor) {
+            const replies = floor.sub_comment_list || [];
+            const count = Math.max(1, Math.ceil(replies.length / replyPageSize));
+            const current = replyPages.get(floor.index) || 0;
+            let html = replies.slice(current * replyPageSize, (current + 1) * replyPageSize).map(renderSubComment).join('');
+            if (count > 1) {
+                html += '<nav class="pagination reply-pagination" aria-label="第' + escapeText(floor.index) + '楼的楼中楼翻页">'
+                    + '<button type="button" data-reply-step="-1"' + (current === 0 ? ' disabled' : '') + '>上一页</button>'
+                    + '<span aria-live="polite">' + (current + 1) + ' / ' + count + ' 页 · 共 ' + replies.length + ' 条</span>'
+                    + '<button type="button" data-reply-step="1"' + (current === count - 1 ? ' disabled' : '') + '>下一页</button>'
+                    + '<label>跳至第 <input data-reply-number type="number" min="1" max="' + count + '" value="' + (current + 1) + '" aria-label="楼中楼页码"> 页</label>'
+                    + '<button type="button" data-reply-jump>跳转</button></nav>';
+            }
+            return html;
+        }
+        function changeReplyPage(container, next) {
+            const floor = floorsByIndex.get(container.dataset.floor);
+            const count = Math.ceil((floor.sub_comment_list || []).length / replyPageSize);
+            if (!Number.isInteger(next) || next < 0 || next >= count) { return; }
+            replyPages.set(floor.index, next);
+            container.innerHTML = renderReplies(floor);
+        }
         const contentDiv = document.getElementById('content');
+        contentDiv.addEventListener('click', event => {
+            const button = event.target.closest('[data-reply-step], [data-reply-jump]');
+            if (!button || button.disabled) { return; }
+            const container = button.closest('.sub-comments');
+            const floor = floorsByIndex.get(container.dataset.floor);
+            const next = button.hasAttribute('data-reply-step')
+                ? (replyPages.get(floor.index) || 0) + Number(button.dataset.replyStep)
+                : Number(container.querySelector('[data-reply-number]').value) - 1;
+            changeReplyPage(container, next);
+        });
+        contentDiv.addEventListener('keydown', event => {
+            if (event.key === 'Enter' && event.target.matches('[data-reply-number]')) {
+                changeReplyPage(event.target.closest('.sub-comments'), Number(event.target.value) - 1);
+            }
+        });
         const pageSize = 30;
         const ownerIndexes = new Set(post.owner_floor_indexes);
         const ownerFloors = post.floor_list.filter(floor => ownerIndexes.has(floor.index));
@@ -388,6 +425,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
             const floors = visibleFloors.slice(page * pageSize, (page + 1) * pageSize);
             contentDiv.innerHTML = floors.map(renderFloor).join('');
             const range = floors.length ? ' · ' + floors[0].index + '–' + floors[floors.length - 1].index + ' 楼' : '';
+            document.querySelectorAll('.main-pagination').forEach(el => { el.hidden = pageCount <= 1; });
             document.querySelectorAll('.page-status').forEach(el => {
                 el.textContent = (page + 1) + ' / ' + pageCount + ' 页' + range;
             });
