@@ -1070,3 +1070,70 @@ test('obsolete Flash players are ignored without losing adjacent text or accepti
     assert.equal(result.floors[0].comment.content, '水墨丹青 - 李玉刚<br>下一段');
     assert.deepEqual(result.warnings, []);
 });
+
+test('image body interruptions retry through the image pacer, stop after three retries, and preserve cancellation', async () => {
+    const { open_http_session } = await import('../src/service/transport');
+    const previous = process.env.TIEBA_COOKIE;
+    process.env.TIEBA_COOKIE = 'BDUSS=synthetic-secret';
+    try {
+        for (const scenario of ['recover', 'exhaust', 'http404', 'cancel']) {
+            const response = structuredClone(fixtures[0].response);
+            Object.assign(response.page as object, { has_more: 0, total_page: 1 });
+            Object.assign(response.first_floor as object, { content: [{ type: 0, text: 'test' }],
+                sub_post_number: 0, sub_post_list: { sub_post_list: [] } });
+            response.post_list = [];
+            const controller = new AbortController();
+            const starts: number[] = [];
+            const logs: { event: string; detail: unknown }[] = [];
+            let now = 0;
+            const image_pacer = new RequestPacer(100, () => now, async ms => {
+                now += ms;
+                if (scenario === 'cancel') { controller.abort(new Error('test cancellation')); }
+            });
+            const send: typeof fetch = async (url, options) => {
+                if (new URL(String(url)).hostname === 'tieba.baidu.com') { return Response.json(response); }
+                assert.equal(new Headers(options?.headers).get('cookie'), null);
+                starts.push(now);
+                if (scenario === 'http404') { return new Response('', { status: 404 }); }
+                if (scenario === 'recover' && starts.length === 4) {
+                    return new Response('complete-image-bytes', { headers: { 'content-type': 'image/jpeg' } });
+                }
+                if (starts.length === 2) {
+                    throw new TypeError('Cookie: synthetic-secret', { cause: { code: 'ECONNRESET' } });
+                }
+                const body = new ReadableStream<Uint8Array>({ start(stream) {
+                    stream.enqueue(new TextEncoder().encode('truncated-image-bytes'));
+                    stream.error(new TypeError('terminated Cookie: synthetic-secret', { cause: { code: 'UND_ERR_SOCKET' } }));
+                } });
+                return new Response(body, { headers: { 'content-type': 'image/jpeg' } });
+            };
+            const root = await mkdtemp(join(tmpdir(), 'tieba-image-retry-'));
+            const job = { id: 'image-retry', post_id: baseline.id, url: `https://tieba.baidu.com/p/${baseline.id}`,
+                status: 'running' as const, created_at: '', updated_at: '', progress: { stage: '' }, warnings: [] };
+            const runner = create_runner(undefined, new RequestPacer(0), image_pacer,
+                signal => open_http_session(signal, send));
+            const pending = runner(job, root, progress, controller.signal, async (_level, event, detail) => { logs.push({ event, detail }); });
+            if (scenario === 'recover') {
+                const result = await pending;
+                assert.deepEqual(result.warnings, []);
+                const archive = await readFile(join(root, 'backup.tar'));
+                assert(archive.includes(Buffer.from('complete-image-bytes')));
+                assert(!archive.includes(Buffer.from('truncated-image-bytes')));
+            } else {
+                await assert.rejects(pending, error => {
+                    assert(error instanceof Error);
+                    assert.match(error.message, scenario === 'http404' ? /HTTP 404/ : scenario === 'cancel'
+                        ? /test cancellation/ : /第 1 楼.*HTTP 响应体读取失败.*连接被对端关闭/);
+                    assert(!JSON.stringify(error, Object.getOwnPropertyNames(error)).includes('synthetic-secret'));
+                    return true;
+                });
+            }
+            assert.deepEqual(starts, ['recover', 'exhaust'].includes(scenario) ? [0, 100, 200, 300] : [0]);
+            assert.equal(logs.filter(row => row.event === 'image_retry').length,
+                scenario === 'http404' ? 0 : scenario === 'cancel' ? 1 : 3);
+            assert(!JSON.stringify(logs).includes('synthetic-secret'));
+        }
+    } finally {
+        if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
+    }
+});

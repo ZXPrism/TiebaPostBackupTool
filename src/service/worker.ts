@@ -11,7 +11,7 @@ import { create_api_request, RequestPacer } from './api';
 import type { Job, Progress } from './model';
 import { prepare_downloads } from './compression';
 import type { Log } from './logging';
-import { open_http_session, type HttpSession } from './transport';
+import { HttpTransportError, open_http_session, type HttpSession } from './transport';
 
 export interface WorkerResult {
     title?: string;
@@ -68,14 +68,27 @@ export function create_runner(
             let image_error: unknown;
             const images = new ImageHandler(async url => {
                 signal.throwIfAborted();
-                try {
-                    // Gate every start, including redirects, within the configured concurrency limit.
-                    return await download(context, url, job.url, () => image_pacer.run(async () => {
-                        if (image_error) { throw image_error; }
-                    }, signal));
-                } catch (error) {
-                    image_error ??= new Error(`图片 ${url}: ${error instanceof Error ? error.message : String(error)}`);
-                    throw image_error;
+                for (let retries = 0; ; retries++) {
+                    try {
+                        // Retried requests and redirects use the same image pacer as first attempts.
+                        return await download(context, url, job.url, () => image_pacer.run(async () => {
+                            if (image_error) { throw image_error; }
+                        }, signal));
+                    } catch (error) {
+                        signal.throwIfAborted();
+                        if (!image_error && error instanceof HttpTransportError && retries < 3) {
+                            await log?.('warn', 'image_retry', { url, attempt: retries + 1, next_attempt: retries + 2,
+                                reason: error.message });
+                            continue;
+                        }
+                        const name = post.image_map?.[url];
+                        const floors = name ? post.floor_list.filter(floor => [floor.comment, ...(floor.sub_comment_list || [])]
+                            .some(comment => comment.avatar_url === name || comment.content.includes(`./images/${name}"`)))
+                            .map(floor => floor.index) : [];
+                        const location = floors.length ? `第 ${floors.join('、')} 楼: ` : '';
+                        image_error ??= new Error(`${location}图片 ${url}: ${error instanceof Error ? error.message : String(error)}`);
+                        throw image_error;
+                    }
                 }
             }, {}, config.image_concurrency, config.image_batch_delay_ms);
             const post = finalize_post(metadata, floors, images);
