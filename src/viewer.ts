@@ -182,7 +182,7 @@ export function create_viewer_html(post: Post, backup_date = new Date(post.backu
         </button>
         <h1>${escape(post.title)}</h1>
         <time class="backup-date" datetime="${backup_date.toISOString()}">备份日期：${escape(formatted_date)}（UTC+8）</time>
-        <div class="meta original-post">原帖：<a class="author-link" href="${escape(post_url)}" target="_blank" rel="noopener noreferrer">${escape(post_url)}</a></div>
+        <div class="meta original-post">原贴：<a class="author-link" href="${escape(post_url)}" target="_blank" rel="noopener noreferrer">${escape(post_url)}</a></div>
         <div class="meta">
             贴吧: <a class="author-link" href="${escape(post.tieba_url)}" target="_blank">${escape(post.tieba_name)}</a> |
             楼层: ${post.floor_list.length} |

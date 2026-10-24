@@ -162,7 +162,7 @@ function render_active(active?: ActiveBackup): void {
     };
     bars[0].detail.textContent = `${active.overall}%`;
     update(0, { current: active.overall, total: 100, complete: false });
-    const [label, unit] = { floors: ['楼层分页', '页'], replies: ['全帖楼中楼', '条'],
+    const [label, unit] = { floors: ['楼层分页', '页'], replies: ['全贴楼中楼', '条'],
         images: ['保存图片', '张'], packaging: ['整理备份', ''], uploading: ['上传备份', '字节'] }[active.phase];
     bars[1].label.textContent = label;
     bars[1].bar.setAttribute('aria-label', label);
