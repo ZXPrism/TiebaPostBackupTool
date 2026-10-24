@@ -5,14 +5,15 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import COS from 'cos-nodejs-sdk-v5';
 import { cos_config, CosArchiveStore, type ArchiveStore } from '../src/service/storage';
+import { config } from '../src/service/config';
 import { JobQueue } from '../src/service/queue';
 import { create_app } from '../src/service/http';
 
 const options = { bucket: 'example-1234567890', region: 'ap-guangzhou', secret_id: 'test-id', secret_key: 'test-key' };
 test('COS is opt-in and incomplete configuration fails without revealing secrets', () => {
     assert.equal(cos_config({}), undefined);
-    assert.throws(() => cos_config({ TIEBA_COS_SECRET_KEY: 'private-key' }), error =>
-        error instanceof Error && error.message.includes('TIEBA_COS_BUCKET') && !error.message.includes('private-key'));
+    assert.throws(() => cos_config({ TIEBA_COS_SECRET_KEY: 'private-key' }, { ...config.cos, enabled: true }), error =>
+        error instanceof Error && error.message.includes('TIEBA_COS_SECRET_ID') && !error.message.includes('private-key'));
 });
 
 test('COS uploads private verified representations, signs downloads and preserves source on verification failure', async () => {

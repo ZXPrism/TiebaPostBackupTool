@@ -2,14 +2,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, access } from 'node:fs/promises';
+import { mkdtemp, readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+async function server_config(directory: string, port = 0): Promise<string> {
+    const value = JSON.parse(await readFile('config.json', 'utf8'));
+    Object.assign(value, { data_dir: directory, host: '127.0.0.1', port });
+    value.cos.enabled = false;
+    const path = join(directory, 'config.json');
+    await writeFile(path, JSON.stringify(value));
+    return path;
+}
 
 test('service starts, holds a durable lock and releases it on SIGTERM', { timeout: 15000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tieba-server-'));
     const child = spawn(process.execPath, ['--import', 'tsx', 'src/service/server.ts'], {
-        env: { ...process.env, TIEBA_COOKIE: 'BDUSS=synthetic-startup', TIEBA_DATA_DIR: directory, HOST: '127.0.0.1', PORT: '0' },
+        env: { ...process.env, TIEBA_COOKIE: 'BDUSS=synthetic-startup', TIEBA_CONFIG: await server_config(directory) },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     const closed = once(child, 'close');
@@ -40,8 +49,7 @@ test('service starts, holds a durable lock and releases it on SIGTERM', { timeou
         {
             const failed_directory = await mkdtemp(join(tmpdir(), 'tieba-server-failed-'));
             const failed = spawn(process.execPath, ['--import', 'tsx', 'src/service/server.ts'], {
-                env: { ...process.env, TIEBA_COOKIE: 'BDUSS=synthetic-startup', TIEBA_DATA_DIR: failed_directory,
-                    HOST: '127.0.0.1', PORT: new URL(origin).port }, stdio: 'ignore',
+                env: { ...process.env, TIEBA_COOKIE: 'BDUSS=synthetic-startup', TIEBA_CONFIG: await server_config(failed_directory, Number(new URL(origin).port)) }, stdio: 'ignore',
             });
             const [code] = await once(failed, 'close');
             assert.notEqual(code, 0);
@@ -113,7 +121,7 @@ test('native HTTP sends signed forms and cookies over the wire and does not foll
 test('service rejects missing or invalid environment cookies before taking the data lock', { timeout: 15000 }, async () => {
     for (const cookie of [undefined, '', 'BAIDUID=synthetic-private-value']) {
         const directory = await mkdtemp(join(tmpdir(), 'tieba-server-cookie-'));
-        const env: NodeJS.ProcessEnv = { ...process.env, TIEBA_DATA_DIR: directory, HOST: '127.0.0.1', PORT: '0' };
+        const env: NodeJS.ProcessEnv = { ...process.env, TIEBA_CONFIG: await server_config(directory) };
         delete env.TIEBA_COOKIE;
         if (cookie !== undefined) { env.TIEBA_COOKIE = cookie; }
         const child = spawn(process.execPath, ['--import', 'tsx', 'src/service/server.ts'], { env, stdio: ['ignore', 'pipe', 'pipe'] });

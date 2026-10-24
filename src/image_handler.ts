@@ -8,6 +8,8 @@ export class ImageHandler {
     constructor(
         private readonly fetch_image?: (url: string) => Promise<Blob>,
         image_map: ImageMap = {},
+        private readonly concurrency = 5,
+        private readonly batch_delay_ms = 1000,
     ) { this.image_map = { ...image_map }; }
 
 
@@ -89,8 +91,8 @@ export class ImageHandler {
         let current = 0;
 
 
-        const BATCH_SIZE = 5;
-        const BATCH_DELAY = 1000; // 1 second between batches
+        const BATCH_SIZE = this.concurrency;
+        const BATCH_DELAY = this.batch_delay_ms;
 
         for (let i = 0; i < entries.length; i += BATCH_SIZE) {
             signal?.throwIfAborted();

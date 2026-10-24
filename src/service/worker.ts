@@ -30,7 +30,7 @@ async function fetch_image(context: HttpSession, original: string, post_url: str
         if (!allowed_url(url)) { throw new Error('图片地址不在允许的域名内'); }
         await before_request?.();
         const response = await context.request.get(url, {
-            timeout: 30000, headers: { Referer: post_url },
+            timeout: config.request_timeout_ms, headers: { Referer: post_url },
         });
         try {
             if ([301, 302, 303, 307, 308].includes(response.status())) {
@@ -43,7 +43,7 @@ async function fetch_image(context: HttpSession, original: string, post_url: str
             const type = response.headers()['content-type'] || '';
             if (!type.startsWith('image/')) { throw new Error('图片响应不是图像'); }
             const bytes = await response.body();
-            if (!bytes.length || bytes.length > 25 * 1024 * 1024) { throw new Error('图片为空或超过 25 MB'); }
+            if (!bytes.length || bytes.length > config.max_image_bytes) { throw new Error(`图片为空或超过 ${config.max_image_bytes} 字节`); }
             return new Blob([new Uint8Array(bytes)], { type });
         } finally { await response.dispose(); }
     }
@@ -69,7 +69,7 @@ export function create_runner(
             const images = new ImageHandler(async url => {
                 signal.throwIfAborted();
                 try {
-                    // ImageHandler caps in-flight downloads at five. Gate every start, including redirects.
+                    // Gate every start, including redirects, within the configured concurrency limit.
                     return await download(context, url, job.url, () => image_pacer.run(async () => {
                         if (image_error) { throw image_error; }
                     }, signal));
@@ -77,7 +77,7 @@ export function create_runner(
                     image_error ??= new Error(`图片 ${url}: ${error instanceof Error ? error.message : String(error)}`);
                     throw image_error;
                 }
-            });
+            }, {}, config.image_concurrency, config.image_batch_delay_ms);
             const post = finalize_post(metadata, floors, images);
             await mkdir(directory, { recursive: true });
             await writeFile(join(directory, 'post.json'), JSON.stringify(post, null, 2));

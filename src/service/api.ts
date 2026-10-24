@@ -1,3 +1,4 @@
+import { config } from './config';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { HttpClient } from './transport';
@@ -60,7 +61,7 @@ export function create_api_request(context: HttpClient, post_url: string, pacer:
         const response = await context.post(`https://tieba.baidu.com${path}`, {
             form: sign_form(parameters),
             headers: { Referer: post_url, 'X-Requested-With': 'XMLHttpRequest' },
-            timeout: 30000,
+            timeout: config.request_timeout_ms,
         }).catch(transport_error);
         try {
             signal.throwIfAborted();
@@ -102,7 +103,7 @@ export function create_api_request(context: HttpClient, post_url: string, pacer:
             } catch (error) {
                 signal.throwIfAborted();
                 if (!(error instanceof RetryableApiError)) { throw error; }
-                if (retries === 3) { throw new Error(`${error.message}（已重试 3 次，共 4 次请求）`, { cause: error }); }
+                if (retries === config.api_max_retries) { throw new Error(`${error.message}（已重试 ${config.api_max_retries} 次，共 ${config.api_max_retries + 1} 次请求）`, { cause: error }); }
                 await log?.('warn', 'api_retry', { path, retry: retries + 1, retry_after_ms: error.retry_after_ms, error });
                 // A server-requested delay is additional to the pacer's minimum start interval.
                 let wait = error.retry_after_ms;

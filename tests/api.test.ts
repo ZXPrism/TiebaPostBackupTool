@@ -4,7 +4,6 @@ import { readFile, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { collect_api, render_api_content, type ApiRequest } from '../src/shared/api-collector';
 import { finalize_post } from '../src/shared/post';
 import { normalize_content_spaces, regression_report } from '../src/shared/regression';
@@ -687,28 +686,6 @@ test('large synthetic thread covers 380 API pages and 20,000 nested replies with
     assert.equal(result.floors.at(-1)?.index, total_floors);
     assert.equal(calls, 2380);
     assert.equal(now, 2379000, '39m39s of simulated request spacing; excludes real latency, images and packaging');
-});
-
-test('API startup configuration uses an hour budget and validates rate overrides', () => {
-    const run = (overrides: Record<string, string>) => spawnSync(process.execPath, [
-        '--import', 'tsx', '--input-type=module', '-e',
-        "import { config } from './src/service/config.ts'; console.log(JSON.stringify(config));",
-    ], { encoding: 'utf8', env: { ...process.env, TIEBA_API_INTERVAL_MS: '1000', TIEBA_IMAGE_INTERVAL_MS: '200', ...overrides } });
-    const api = run({});
-    assert.ifError(api.error);
-    assert.equal(api.status, 0, api.stderr);
-    const selected = JSON.parse(api.stdout);
-    assert.equal(selected.job_timeout_ms, 3600000);
-    assert.equal(selected.api_request_interval_ms, 1000);
-    assert.equal(selected.image_request_interval_ms, 200);
-    assert.equal(selected.max_api_pages, 2000);
-    const custom = run({ TIEBA_API_INTERVAL_MS: '1500', TIEBA_IMAGE_INTERVAL_MS: '300' });
-    assert.equal(JSON.parse(custom.stdout).api_request_interval_ms, 1500);
-    for (const value of ['0', '-1', '1.5', 'NaN', '']) {
-        const invalid = run({ TIEBA_API_INTERVAL_MS: value });
-        assert.notEqual(invalid.status, 0);
-        assert.match(invalid.stderr, /TIEBA_API_INTERVAL_MS 必须为正整数/);
-    }
 });
 
 test('native HTTP backend backs up fixtures and scopes the environment cookie', async () => {

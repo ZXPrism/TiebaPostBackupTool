@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
+import { config, type ServiceConfig } from './config';
 import COS from 'cos-nodejs-sdk-v5';
 import { stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,12 +18,12 @@ export interface ArchiveStore {
     url(archive: StoredArchive, encoding: Representation, method: 'GET' | 'HEAD'): Promise<string>;
 }
 export interface CosConfig { bucket: string; region: string; secret_id: string; secret_key: string }
-export function cos_config(env: NodeJS.ProcessEnv = process.env): CosConfig | undefined {
-    const names = ['TIEBA_COS_BUCKET', 'TIEBA_COS_REGION', 'TIEBA_COS_SECRET_ID', 'TIEBA_COS_SECRET_KEY'] as const;
-    if (!names.some(name => env[name])) { return undefined; }
+export function cos_config(env: NodeJS.ProcessEnv = process.env, settings: ServiceConfig['cos'] = config.cos): CosConfig | undefined {
+    if (!settings.enabled) { return undefined; }
+    const names = ['TIEBA_COS_SECRET_ID', 'TIEBA_COS_SECRET_KEY'] as const;
     const missing = names.filter(name => !env[name]?.trim());
     if (missing.length) { throw new Error('COS 配置缺少环境变量：' + missing.join('、')); }
-    return { bucket: env.TIEBA_COS_BUCKET || '', region: env.TIEBA_COS_REGION || '',
+    return { bucket: settings.bucket, region: settings.region,
         secret_id: env.TIEBA_COS_SECRET_ID || '', secret_key: env.TIEBA_COS_SECRET_KEY || '' };
 }
 
@@ -37,8 +38,8 @@ export class CosArchiveStore implements ArchiveStore {
     private readonly client: COS;
     constructor(private readonly options: CosConfig, client?: COS) {
         this.client = client ?? new COS({ SecretId: options.secret_id, SecretKey: options.secret_key,
-            Protocol: 'https:', UploadCheckContentMd5: true, FileParallelLimit: 1, ChunkParallelLimit: 2,
-            ChunkRetryTimes: 3, Timeout: 60000 });
+            Protocol: 'https:', UploadCheckContentMd5: true, FileParallelLimit: 1, ChunkParallelLimit: config.cos.upload_concurrency,
+            ChunkRetryTimes: config.cos.max_retries, Timeout: config.cos.request_timeout_ms });
     }
 
     async publish(id: string, directory: string, filename: string, progress: (value: Progress) => Promise<void>, signal: AbortSignal): Promise<StoredArchive> {
@@ -107,7 +108,7 @@ export class CosArchiveStore implements ArchiveStore {
     async url(archive: StoredArchive, encoding: Representation, method: 'GET' | 'HEAD'): Promise<string> {
         return new Promise((resolve, reject) => {
             this.client.getObjectUrl({ Bucket: archive.bucket, Region: archive.region,
-                Key: `${archive.prefix}/${encoding}`, Method: method as COS.GetObjectUrlParams['Method'], Sign: true, Expires: 900, Protocol: 'https:' },
+                Key: `${archive.prefix}/${encoding}`, Method: method as COS.GetObjectUrlParams['Method'], Sign: true, Expires: config.cos.signed_url_expires_seconds, Protocol: 'https:' },
             (error, data) => error ? reject(storage_error('生成下载链接', error)) : resolve(data.Url));
         });
     }

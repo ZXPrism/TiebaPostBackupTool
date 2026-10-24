@@ -32,21 +32,28 @@ npm start
 
 在已登录贴吧的浏览器中，通过开发者工具查看 Cookie，取得 `BDUSS` 的值并替换上面的占位内容。服务只从环境变量读取 Cookie；未设置或格式无效时拒绝启动并提示原因。请勿公开或提交登录凭据。
 
-默认访问地址为 `http://127.0.0.1:3000`。如需从其他设备访问：
+服务启动时必须读取完整的 JSON 配置，默认使用项目根目录的 [config.json](config.json)。修改文件后重启服务生效。文件不存在、JSON 无效、缺少字段、出现未知字段或值不合法时，服务拒绝启动，不会补充默认值。
 
-```sh
-HOST=0.0.0.0 PORT=3000 npm start
-```
+默认访问地址为 `http://127.0.0.1:3000`。如需从其他设备访问，将配置中的 `host` 改为 `0.0.0.0`，并在防火墙和云安全组开放配置中的 `port`。长期运行可使用 systemd，并在其运行环境中设置 `TIEBA_COOKIE`。
 
-在服务器防火墙和云平台安全组中开放对应端口，然后访问 `http://服务器IP:3000`。长期运行可使用 systemd 等进程管理工具，并在其运行环境中设置 `TIEBA_COOKIE`。
+也可以复制完整配置，使用 `TIEBA_CONFIG=/绝对路径/config.json npm start` 指定部署配置文件。原有 `HOST`、`PORT`、`TIEBA_DATA_DIR`、`TIEBA_BASE_PATH` 和采集间隔环境变量不再覆盖 JSON 配置。
 
-备份结果默认保存在项目的 `.data/` 目录。可通过 `TIEBA_DATA_DIR` 指定存储目录，例如：
+| 配置项 | 含义 |
+| --- | --- |
+| `host`、`port` | 监听地址和端口；端口 0 表示由系统分配 |
+| `base_path` | 服务路径前缀；空字符串表示根路径，例如 `/tpbt`，不带末尾斜杠；反向代理需保留此前缀 |
+| `data_dir` | 数据目录，默认 `.data`；相对路径以项目根目录为基准 |
+| `max_pending` | 正在执行与排队任务的总上限 |
+| `api_request_interval_ms` | 内容接口请求的最小启动间隔，重试也受其约束 |
+| `image_request_interval_ms` | 图片请求的最小启动间隔 |
+| `image_concurrency`、`image_batch_delay_ms` | 每批图片并发数、批次间等待时间 |
+| `max_image_bytes` | 单张图片大小上限，单位字节 |
+| `request_timeout_ms` | 贴吧接口和图片单次请求超时 |
+| `api_max_retries` | 内容接口临时错误的额外重试次数；0 表示不重试 |
+| `max_api_pages` | 楼层及每层楼中楼各自的分页上限 |
+| `job_timeout_ms` | 整个备份任务的超时，包括上传 |
 
-```sh
-TIEBA_DATA_DIR=/srv/tieba-backups npm start
-```
-
-需要部署到子路径时，设置 `TIEBA_BASE_PATH`（例如 `/tpbt`），并让反向代理保留该路径前缀转发请求。
+所有 `_ms` 字段均以毫秒为单位。服务始终串行执行备份任务。
 
 同一数据目录只运行一个服务实例。更新程序时保留该目录即可保留已有备份。
 
@@ -54,11 +61,9 @@ TIEBA_DATA_DIR=/srv/tieba-backups npm start
 
 ### 可选：腾讯云 COS
 
-不配置 COS 时，所有备份继续保存在本地。需要将新备份的归档存入 COS 时，在服务运行环境中设置：
+配置中的 `cos.enabled` 为 `false` 时，所有备份保存在本地，`cos.bucket`、`cos.region` 可为空字符串；其余 COS 字段仍须显式填写。启用时，将 `cos.enabled` 改为 `true`，填写完整桶名（含 APPID）及地域，并通过环境变量提供 `TIEBA_COS_SECRET_ID`、`TIEBA_COS_SECRET_KEY`。密钥需具有上传、分块上传、读取和设置对象私有权限，不能写入配置文件。
 
-- `TIEBA_COS_BUCKET`：完整桶名（含 APPID）。
-- `TIEBA_COS_REGION`：桶所在地域，例如 `ap-guangzhou`。
-- `TIEBA_COS_SECRET_ID`、`TIEBA_COS_SECRET_KEY`：具有该桶上传、分块上传、读取和设置对象私有权限的访问密钥。
+COS 配置还包括 `request_timeout_ms`（请求超时）、`max_retries`（分块失败的额外重试次数）、`upload_concurrency`（分块并发数）及 `signed_url_expires_seconds`（下载链接有效秒数）。原有桶名和地域环境变量不再使用。
 
 归档上传并校验成功后，本地 TAR 及其压缩副本会删除；任务记录、贴子 JSON 和预览所需数据继续留在本地，因此仍需保留数据目录。已有本地归档不自动迁移。下载通过短期有效的签名链接直接访问 COS，浏览器透明处理传输压缩，用户得到的仍是 TAR 文件。停用 COS 后，已有云端归档需要恢复配置才能下载。
 

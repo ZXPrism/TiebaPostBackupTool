@@ -1,3 +1,4 @@
+import { config } from './config';
 import { load_cookie } from './session';
 
 export interface HttpResponse {
@@ -28,7 +29,7 @@ export async function open_http_session(signal: AbortSignal, send: typeof fetch 
         try {
             response = await send(url, { method, headers, redirect: 'manual',
                 body: options.form ? new URLSearchParams(options.form) : undefined,
-                signal: AbortSignal.any([signal, controller.signal, AbortSignal.timeout(options.timeout ?? 30000)]) });
+                signal: AbortSignal.any([signal, controller.signal, AbortSignal.timeout(options.timeout ?? config.request_timeout_ms)]) });
         } catch (error) {
             signal.throwIfAborted();
             // Keep only known transport codes; never retain an exception containing request headers.
