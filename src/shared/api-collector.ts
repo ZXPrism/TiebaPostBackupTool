@@ -65,6 +65,7 @@ const legacy_emoticons = [
     { prefix: 'llb_0', count: 60, folder: 'luoluobu' },
     { prefix: 'bearchildren_', count: 60, folder: 'bearchildren' },
     { prefix: 'B_00', count: 63, folder: 'bobo' },
+    { prefix: 'w_00', count: 53, folder: 'ldw' },
 ];
 
 function emoticon_url(name: string): string {

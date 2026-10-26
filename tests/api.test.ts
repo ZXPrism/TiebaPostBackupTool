@@ -175,6 +175,27 @@ test('legacy bubble bear emoticons survive nested collection and offline GIF map
     }
 });
 
+test('green bean frog emoticons survive nested collection and offline GIF mapping', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-ldw-emoticon.json', 'utf8'));
+    const url = 'https://tb2.bdstatic.com/tb/editor/images/ldw/w_0019.gif';
+    const records = structuredClone(fixtures);
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    const filename = post.image_map?.[url];
+    assert(filename?.endsWith('.gif'));
+    const reply = post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0];
+    assert.equal(reply?.content, render_api_content(content).replaceAll(url, `./images/${filename}`));
+    for (let id = 1; id <= 53; id++) {
+        const name = `w_00${String(id).padStart(2, '0')}`;
+        assert(render_api_content([{ type: 2, text: name }]).includes(`/ldw/${name}.gif`));
+    }
+    for (const name of ['w_0000', 'w_0054', 'w_019', 'W_0019', 'w_0019.gif', 'w_0019/../x']) {
+        assert.throws(() => render_api_content([{ type: 2, text: name }]), /尚未支持/);
+    }
+});
+
 test('other recorded legacy emoji packs retain their original resources', async () => {
     const { content } = JSON.parse(await readFile('tests/regression/api-legacy-emoticons.json', 'utf8'));
     const html = render_api_content(content);
