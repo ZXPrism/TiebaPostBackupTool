@@ -1,0 +1,34 @@
+{
+  "thread_id": 8870872072,
+  "pinned": {
+    "id": 149655850677,
+    "floor": 0,
+    "content": [
+      {
+        "type": 0,
+        "text": "400块1T的QLC，鉴定为工业垃圾"
+      },
+      {
+        "type": 2,
+        "text": "image_emoticon22",
+        "c": "笑眼"
+      }
+    ],
+    "author_id": 914447054,
+    "time": 1705844617,
+    "sub_post_number": 0,
+    "is_fold": 0,
+    "stamp_info": {
+      "type": "top_answer"
+    }
+  },
+  "detail": {
+    "thread": {
+      "id": 8870872072
+    },
+    "post": {
+      "id": 149655850677,
+      "floor": 3
+    }
+  }
+}

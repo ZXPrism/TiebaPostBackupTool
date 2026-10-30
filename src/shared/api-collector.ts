@@ -1,7 +1,7 @@
 import type { Comment, Floor, Post } from '../types';
 import type { CollectionProgress, Progress } from './progress';
 
-export type ApiPath = '/c/f/pb/page_pc' | '/c/f/pb/nestedFloor';
+export type ApiPath = '/c/f/pb/page_pc' | '/c/f/pb/nestedFloor' | '/c/f/pb/floor';
 export type ApiRequest = (path: ApiPath, parameters: Record<string, string>) => Promise<unknown>;
 export interface Collection {
     metadata: Omit<Post, 'floor_list' | 'image_map'>;
@@ -182,6 +182,7 @@ export async function collect_api(
 ): Promise<Collection> {
     const users = new Map<number, RecordValue>();
     const raw_floors: RecordValue[] = [];
+    const pinned_floors: RecordValue[] = [];
     const seen = new Set<number>();
     const warnings: string[] = [];
     const notes: string[] = [];
@@ -235,20 +236,40 @@ export async function collect_api(
         const batch_ids = new Set<number>();
         let previous_floor = 0;
         const previous_count = raw_floors.length;
-        for (const post of batch) {
+        for (let post of batch) {
             try {
                 const id = integer(post.id, 'post.id', 1);
+                const pinned = (post.floor === 0 || post.floor === '0')
+                    && (post.stamp_info as RecordValue | undefined)?.type === 'top_answer';
+                if (pinned) {
+                    if (seen.has(id)) { continue; }
+                    // Promoted answers lose their original floor in page_pc. The single-floor
+                    // endpoint retains it; never infer a number from gaps or display order.
+                    const detail = object(await request('/c/f/pb/floor', {
+                        kz: String(post_id), tid: String(post_id), pid: String(id), pn: '1', rn: '30', lz: '0', r: '0',
+                    }), 'floor');
+                    if (integer(object(detail.thread, 'floor.thread').id, 'floor.thread.id', 1) !== post_id) {
+                        throw new Error('置顶回答补查返回的贴子 ID 不匹配');
+                    }
+                    const original = object(detail.post, 'floor.post');
+                    if (integer(original.id, 'floor.post.id', 1) !== id) {
+                        throw new Error('置顶回答补查返回的回复 ID 不匹配');
+                    }
+                    post = { ...post, floor: integer(original.floor, 'floor.post.floor', 2) };
+                }
                 const floor = integer(post.floor, 'post.floor', 1);
-                if (batch_ids.has(id) || floor <= previous_floor) { throw new Error(`接口单次响应出现重复或乱序楼层: floor=${floor}, post_id=${id}`); }
-                batch_ids.add(id);
-                previous_floor = floor;
+                if (!pinned) {
+                    if (batch_ids.has(id) || floor <= previous_floor) { throw new Error(`接口单次响应出现重复或乱序楼层: floor=${floor}, post_id=${id}`); }
+                    batch_ids.add(id);
+                    previous_floor = floor;
+                }
                 const folded = post.is_fold !== undefined && integer(post.is_fold, 'post.is_fold') > 0;
                 if (folded && array(post.content, 'content').length === 0) {
                     throw new Error(`接口未返回折叠楼层的正文（is_fold=${post.is_fold}），无法获取展开后的内容`);
                 }
                 // Live pages can overlap. Keep the version first collected without rescanning.
                 if (seen.has(id)) { continue; }
-                if (floor <= Number(raw_floors.at(-1)?.floor || 0)) { throw new Error(`接口出现乱序楼层: floor=${floor}, post_id=${id}`); }
+                if (!pinned && floor <= Number(raw_floors.at(-1)?.floor || 0)) { throw new Error(`接口出现乱序楼层: floor=${floor}, post_id=${id}`); }
                 // Detect unsupported content on receipt, before fetching later pages.
                 render_api_content(post.content);
                 if (folded) { found_fold_content = true; }
@@ -260,7 +281,7 @@ export async function collect_api(
                     }
                 }
                 seen.add(id);
-                raw_floors.push(post);
+                (pinned ? pinned_floors : raw_floors).push(post);
             } catch (error) { throw content_error(error, post.floor, post.id); }
         }
         finished = !flag(page.has_more, 'page.has_more');
@@ -269,9 +290,21 @@ export async function collect_api(
         if (finished) { break; }
         if (!posts.length) { throw new Error('接口声明还有下一页，但当前楼层列表为空'); }
         if (raw_floors.length === previous_count) { throw new Error('接口楼层分页游标未前进'); }
-        last_pid = integer(posts[posts.length - 1].id, 'last_pid', 1);
+        const cursor = [...posts].reverse().find(post => Number(post.floor) > 0);
+        if (!cursor) { throw new Error('接口楼层分页游标未前进：本页只有置顶回答'); }
+        last_pid = integer(cursor.id, 'last_pid', 1);
     }
     if (!finished || !metadata) { throw new Error(`接口分页未结束，已达到 ${max_pages} 页限制`); }
+    if (pinned_floors.length) {
+        raw_floors.push(...pinned_floors);
+        raw_floors.sort((a, b) => Number(a.floor) - Number(b.floor));
+        for (let index = 1; index < raw_floors.length; index++) {
+            const post = raw_floors[index];
+            if (Number(post.floor) === Number(raw_floors[index - 1].floor)) {
+                throw content_error(new Error('不同回复使用了相同的原始楼层编号'), post.floor, post.id);
+            }
+        }
+    }
     if (has_fold_comment && !found_fold_content) {
         throw new Error('接口标记存在折叠内容，但遍历楼层后未返回具体折叠楼层，无法定位楼层及完整备份');
     }

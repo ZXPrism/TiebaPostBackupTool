@@ -1158,3 +1158,55 @@ test('image body interruptions retry through the image pacer, stop after three r
         if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
     }
 });
+
+test('recorded promoted answer restores floor 3 without changing its content or renumbering gaps', async () => {
+    const fixture = JSON.parse(await readFile('tests/regression/api-top-answer.json', 'utf8'));
+    const records = structuredClone(fixtures);
+    const posts = records[0].response.post_list as Record<string, unknown>[];
+    const index = posts.findIndex(p => Number(p.floor) === 3);
+    assert(index >= 0);
+    const original = posts.splice(index, 1)[0];
+    posts.unshift({ ...original, ...fixture.pinned, author_id: original.author_id });
+    records.push({ path: '/c/f/pb/floor', parameters: { tid: String(baseline.id), pid: String(fixture.pinned.id), pn: '1', rn: '30' },
+        response: { ...fixture.detail, thread: { id: baseline.id } } });
+    const { request, calls } = replay(records);
+    const result = await collect_api(baseline.id, request, progress, signal);
+    assert.deepEqual(result.floors.map(f => f.index), baseline.floor_list.map(f => f.index));
+    assert.equal(result.floors.find(f => f.index === 3)?.comment.content, render_api_content(fixture.pinned.content));
+    assert.equal(calls.filter(call => call.includes('/c/f/pb/floor')).length, 1);
+});
+
+test('promoted answer on a later page is collected once with all nested replies and the original cursor', async () => {
+    const records = structuredClone(fixtures);
+    const first = records[0].response.post_list as Record<string, unknown>[];
+    const second = records[1].response.post_list as Record<string, unknown>[];
+    const original = second.find(p => Number(p.floor) === 21);
+    assert(original);
+    const pinned = { ...structuredClone(original), floor: 0, stamp_info: { type: 'top_answer' } };
+    first.unshift(pinned);
+    second.unshift(structuredClone(pinned));
+    records.push({ path: '/c/f/pb/floor', parameters: { tid: String(baseline.id), pid: String(original.id) },
+        response: { thread: { id: baseline.id }, post: { id: original.id, floor: original.floor } } });
+    const { request, calls } = replay(records);
+    const result = await collect_api(baseline.id, request, progress, signal);
+    assert.deepEqual(result.floors.map(f => f.index), baseline.floor_list.map(f => f.index));
+    assert.equal(result.floors.find(f => f.index === 21)?.sub_comment_list?.length, 18);
+    assert.equal(calls.filter(call => call.includes('/c/f/pb/floor')).length, 1);
+});
+
+test('promoted answer recovery rejects mismatched IDs, invalid or conflicting floors and unmarked zero floors', async () => {
+    for (const scenario of ['thread', 'post', 'zero', 'missing', 'collision', 'unmarked']) {
+        const records = structuredClone(fixtures);
+        const posts = records[0].response.post_list as Record<string, unknown>[];
+        const original = posts.splice(1, 1)[0];
+        posts.unshift({ ...original, floor: 0, ...(scenario === 'unmarked' ? {} : { stamp_info: { type: 'top_answer' } }) });
+        const detail: Record<string, unknown> = { id: scenario === 'post' ? 1 : original.id,
+            floor: scenario === 'zero' ? 0 : scenario === 'collision' ? posts[1].floor : original.floor };
+        if (scenario === 'missing') { delete detail.floor; }
+        records.push({ path: '/c/f/pb/floor', parameters: { tid: String(baseline.id), pid: String(original.id) },
+            response: { thread: { id: scenario === 'thread' ? 1 : baseline.id }, post: detail } });
+        const { request, calls } = replay(records);
+        await assert.rejects(collect_api(baseline.id, request, progress, signal), /ID 不匹配|floor.*安全整数|相同的原始楼层编号/);
+        if (scenario === 'unmarked') { assert.equal(calls.length, 1); }
+    }
+});
