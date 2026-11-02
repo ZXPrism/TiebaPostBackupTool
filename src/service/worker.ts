@@ -64,7 +64,8 @@ export function create_runner(
         try {
             signal.throwIfAborted();
             const { floors, warnings, notes, metadata } = await collect_api(job.post_id,
-                create_api_request(context.request, job.url, pacer, signal, log), progress, signal, config.max_api_pages);
+                create_api_request(context.request, job.url, pacer, signal, log), progress, signal, config.max_api_pages,
+                async location => { await log?.('warn', 'api_content_empty', location); });
             let image_error: unknown;
             const images = new ImageHandler(async url => {
                 signal.throwIfAborted();

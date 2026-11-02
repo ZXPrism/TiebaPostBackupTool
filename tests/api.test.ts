@@ -196,6 +196,28 @@ test('green bean frog emoticons survive nested collection and offline GIF mappin
     }
 });
 
+test('recorded meme image preserves the body source and dimensions in floors and nested replies', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-meme-content.json', 'utf8'));
+    const item = content[0];
+    const html = `<img class="BDE_Smiley" src="${item.src}" width="320" height="320">`;
+    assert.equal(render_api_content(content), html);
+    assert(!html.includes(item.meme_info.detail_link));
+    for (const bad of [{ ...item, src: 'javascript:alert(1)' }, { ...item, bsize: 'invalid' }, { ...item, src: undefined }]) {
+        assert.throws(() => render_api_content([bad]));
+    }
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = content;
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    const filename = post.image_map?.[item.src];
+    assert(filename?.endsWith('.jpg'));
+    const expected = html.replace(item.src, `./images/${filename}`);
+    assert.equal(post.floor_list[0].comment.content, expected);
+    assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, expected);
+});
+
 test('other recorded legacy emoji packs retain their original resources', async () => {
     const { content } = JSON.parse(await readFile('tests/regression/api-legacy-emoticons.json', 'utf8'));
     const html = render_api_content(content);
@@ -557,6 +579,42 @@ test('verified unavailable original produces a complete job with a note in the a
         assert.deepEqual(report.warnings, []);
         assert.equal(report.notes.length, 1);
         assert(report.notes[0].includes(source.web_image_url));
+    } finally { await queue.close(); }
+});
+
+test('recorded empty floor completes a backup and writes its exact location to the task log', async () => {
+    const fixture = JSON.parse(await readFile('tests/regression/api-empty-content.json', 'utf8'));
+    const response = structuredClone(fixtures[0].response);
+    Object.assign(response.page as object, { has_more: 0, total_page: 1 });
+    Object.assign(response.thread as object, { id: fixture.thread_id });
+    Object.assign(response.first_floor as object, { content: [{ type: 0, text: '正常正文' }], sub_post_number: 0,
+        sub_post_list: { sub_post_list: [] } });
+    response.post_list = [fixture.post];
+    (response.user_list as unknown[]).push(fixture.author);
+    const context = {
+        close: async () => undefined,
+        request: { post: async () => ({ status: () => 200, text: async () => JSON.stringify(response), dispose: async () => undefined }) },
+    } as unknown as HttpSession;
+    const root = await mkdtemp(join(tmpdir(), 'tieba-api-empty-content-'));
+    const queue = new JobQueue(root, create_runner(async () => new Blob(['avatar'], { type: 'image/png' }),
+        new RequestPacer(0), new RequestPacer(0), async () => context));
+    await queue.initialize();
+    try {
+        const job = await queue.submit(String(fixture.thread_id));
+        const deadline = Date.now() + 5000;
+        while (!['complete', 'partial', 'failed'].includes(job.status) && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.equal(job.status, 'complete', job.error || 'Job did not complete');
+        const post = JSON.parse(await readFile(join(root, job.id, 'post.json'), 'utf8')) as Post;
+        assert.equal(post.floor_list.find(f => f.index === 1048)?.comment.content, '<strong>此处内容暂无法备份</strong>');
+        const logs = (await readFile(join(root, job.id, 'job.log'), 'utf8')).trim().split('\n')
+            .map(line => JSON.parse(line)).filter(record => record.event === 'api_content_empty');
+        assert.equal(logs.length, 1);
+        assert.equal(logs[0].level, 'warn');
+        assert.equal(logs[0].job_id, job.id);
+        assert.deepEqual(logs[0].detail, { thread_id: fixture.thread_id, floor: 1048, post_id: fixture.post.id, reason: 'missing' });
+        assert((await readFile(join(root, job.id, 'backup.tar'))).length > 0);
     } finally { await queue.close(); }
 });
 
@@ -1063,17 +1121,48 @@ test('folded floors with visible bodies are collected normally, including the ob
     }
 });
 
-test('missing folded body fails with its exact floor instead of silently omitting content', async () => {
+test('empty content uses a bold placeholder, including folded floors, without hiding other parse errors', async () => {
+    for (const empty of [undefined, null, [], '']) {
+        const records = structuredClone(fixtures);
+        const first = records[0].response.first_floor as Record<string, unknown>;
+        first.is_fold = 2;
+        first.content = empty;
+        const locations: unknown[] = [];
+        const result = await collect_api(baseline.id, replay(records).request, progress, signal, 200,
+            async location => { locations.push(location); });
+        assert.equal(result.floors[0].comment.content, '<strong>此处内容暂无法备份</strong>');
+        assert.equal(result.notes.length, 1);
+        assert.match(result.notes[0], /^第 1 楼: 接口未返回正文/);
+        assert.equal(locations.length, 1);
+        assert.deepEqual(result.warnings, []);
+    }
+    for (const invalid of [{}, false, 0, 'nonempty', [{ type: 99 }]]) {
+        assert.throws(() => render_api_content(invalid));
+    }
+    assert.equal(render_api_content([{ type: 10, voice_md5: 'omitted' }]), '', 'Intentional voice omission is not missing content');
+});
+
+test('empty nested content records precise locations once across embedded and paginated responses', async () => {
     const records = structuredClone(fixtures);
     const first = records[0].response.first_floor as Record<string, unknown>;
-    first.is_fold = 2;
-    first.content = [];
-    await assert.rejects(collect_api(baseline.id, replay(records).request, progress, signal), error => {
-        assert(error instanceof Error);
-        assert(error.message.includes(`第 1 楼（post_id=${first.id}）`));
-        assert.match(error.message, /未返回折叠楼层的正文/);
-        return true;
-    });
+    first.sub_post_number = 1;
+    first.sub_post_list = { sub_post_list: [{ id: 99999, author_id: first.author_id, time: first.time }] };
+    const nested = records[2].response.data as Record<string, unknown>;
+    const reply = (nested.post_list as Record<string, unknown>[])[0];
+    reply.content = null;
+    const parent = (records[1].response.post_list as Record<string, unknown>[]).find(p => Number(p.floor) === 21);
+    assert(parent);
+    parent.sub_post_list = { sub_post_list: [structuredClone(reply)] };
+    const locations: unknown[] = [];
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal, 200,
+        async location => { locations.push(location); });
+    assert.deepEqual(locations, [
+        { thread_id: baseline.id, floor: 1, post_id: first.id, reply_id: 99999, reason: 'missing' },
+        { thread_id: baseline.id, floor: 21, post_id: parent.id, reply_id: reply.id, reason: 'null' },
+    ]);
+    assert.equal(result.floors[0].sub_comment_list?.[0].content, '<strong>此处内容暂无法备份</strong>');
+    assert.equal(result.floors.find(f => f.index === 21)?.sub_comment_list?.[0].content, '<strong>此处内容暂无法备份</strong>');
+    assert.equal(result.notes.length, 2);
 });
 
 

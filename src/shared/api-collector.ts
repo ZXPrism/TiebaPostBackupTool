@@ -9,7 +9,22 @@ export interface Collection {
     warnings: string[];
     notes: string[];
 }
+export interface EmptyContentLocation {
+    thread_id: number;
+    floor: number;
+    post_id: number;
+    reply_id?: number;
+    reason: 'missing' | 'null' | 'empty_array' | 'empty_string';
+}
 type RecordValue = Record<string, unknown>;
+
+function empty_content_reason(value: unknown): EmptyContentLocation['reason'] | undefined {
+    if (value === undefined) { return 'missing'; }
+    if (value === null) { return 'null'; }
+    if (Array.isArray(value) && value.length === 0) { return 'empty_array'; }
+    if (value === '') { return 'empty_string'; }
+    return undefined;
+}
 
 function object(value: unknown, field: string): RecordValue {
     if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new Error(`接口字段 ${field} 应为对象`); }
@@ -93,6 +108,10 @@ function emoticon_url(name: string): string {
 
 /** Render supported structured content. Unknown types fail rather than disappearing from a backup. */
 export function render_api_content(value: unknown, note?: (message: string) => void): string {
+    if (empty_content_reason(value)) {
+        note?.('接口未返回正文，已标注“此处内容暂无法备份”');
+        return '<strong>此处内容暂无法备份</strong>';
+    }
     const items = array(value, 'content');
     const parts = items.map((value, index) => {
         const item = object(value, `content[${index}]`);
@@ -116,10 +135,12 @@ export function render_api_content(value: unknown, note?: (message: string) => v
                 const url = emoticon_url(name);
                 return `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${url}">`;
             }
-            case 3: {
+            case 3:
+            case 20: { // Meme images use src; their detail links are not part of the visible body.
                 const dimensions = text(item.bsize, 'content.bsize').match(/^(\d+),(\d+)$/);
                 if (!dimensions) { throw new Error('接口图片 bsize 格式无效'); }
-                return `<img class="BDE_Image" src="${link(item.origin_src, 'content.origin_src')}" width="${dimensions[1]}" height="${dimensions[2]}">`;
+                const source = type === 20 ? link(item.src, 'content.src') : link(item.origin_src, 'content.origin_src');
+                return `<img class="${type === 20 ? 'BDE_Smiley' : 'BDE_Image'}" src="${source}" width="${dimensions[1]}" height="${dimensions[2]}">`;
             }
             case 11: {
                 const source = link(item.static, 'content.static');
@@ -180,6 +201,7 @@ export async function collect_api(
     post_id: number, request: ApiRequest,
     progress: (value: Progress) => Promise<void>,
     signal: AbortSignal, max_pages = 200,
+    on_empty_content?: (location: EmptyContentLocation) => Promise<void>,
 ): Promise<Collection> {
     const users = new Map<number, RecordValue>();
     const raw_floors: RecordValue[] = [];
@@ -187,6 +209,19 @@ export async function collect_api(
     const seen = new Set<number>();
     const warnings: string[] = [];
     const notes: string[] = [];
+    const empty_reported = new Set<string>();
+    const report_empty = async (raw: RecordValue, parent: RecordValue) => {
+        const reason = empty_content_reason(raw.content);
+        if (!reason) { return; }
+        const location: EmptyContentLocation = {
+            thread_id: post_id, floor: integer(parent.floor, 'floor', 1), post_id: integer(parent.id, 'post.id', 1),
+            ...(raw !== parent ? { reply_id: integer(raw.id, 'sub_post.id', 1) } : {}), reason,
+        };
+        const key = `${location.post_id}:${location.reply_id ?? ''}`;
+        if (empty_reported.has(key)) { return; }
+        await on_empty_content?.(location);
+        empty_reported.add(key);
+    };
     let metadata: Collection['metadata'] | undefined;
     let last_pid: number | undefined;
     let finished = false;
@@ -265,20 +300,19 @@ export async function collect_api(
                     previous_floor = floor;
                 }
                 const folded = post.is_fold !== undefined && integer(post.is_fold, 'post.is_fold') > 0;
-                if (folded && array(post.content, 'content').length === 0) {
-                    throw new Error(`接口未返回折叠楼层的正文（is_fold=${post.is_fold}），无法获取展开后的内容`);
-                }
                 // Live pages can overlap. Keep the version first collected without rescanning.
                 if (seen.has(id)) { continue; }
                 if (!pinned && floor <= Number(raw_floors.at(-1)?.floor || 0)) { throw new Error(`接口出现乱序楼层: floor=${floor}, post_id=${id}`); }
                 // Detect unsupported content on receipt, before fetching later pages.
                 render_api_content(post.content);
+                await report_empty(post, post);
                 if (folded) { found_fold_content = true; }
                 if (post.sub_post_list) {
                     const embedded = array(object(post.sub_post_list, 'sub_post_list').sub_post_list, 'sub_post_list.sub_post_list');
                     for (const value of embedded) {
                         const reply = object(value, 'sub_post');
                         at_reply(reply, post, () => render_api_content(reply.content));
+                        await report_empty(reply, post);
                     }
                 }
                 seen.add(id);
@@ -350,6 +384,7 @@ export async function collect_api(
                                 replies.push(reply);
                             }
                         });
+                        await report_empty(reply, raw);
                     }
                     collection.replies = { current: completed_replies + replies.length,
                         total: completed_replies + remaining_replies + (done ? replies.length : Math.max(count, replies.length + 1)), complete: false };
