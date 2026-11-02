@@ -98,6 +98,7 @@ export function render_api_content(value: unknown, note?: (message: string) => v
         const item = object(value, `content[${index}]`);
         const type = integer(item.type, 'content.type');
         switch (type) {
+            case 10: return ''; // Voice messages are intentionally omitted; keep adjacent text.
             case 0:
             case 9:
             case 40: // Keep keyword text without Tieba's added search link or decoration.

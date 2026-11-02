@@ -1077,6 +1077,28 @@ test('missing folded body fails with its exact floor instead of silently omittin
 });
 
 
+test('recorded voice reply keeps text in floors and both embedded and paginated nested replies', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-voice-reply.json', 'utf8'));
+    const voice = content.find((item: { type: number }) => item.type === 10);
+    assert.equal(render_api_content(content), '哈喽 你猜我是谁');
+    assert.equal(render_api_content([voice]), '');
+    assert.equal(render_api_content([{ type: 0, text: '前文\n' }, voice, { type: 0, text: '<后文>' }]), '前文<br>&lt;后文&gt;');
+    assert.throws(() => render_api_content([...content, { type: 99 }]), /type=99/);
+
+    const records = structuredClone(fixtures);
+    const first = records[0].response.first_floor as Record<string, unknown>;
+    first.content = content;
+    first.sub_post_number = 1;
+    first.sub_post_list = { sub_post_list: [{ id: 84450477636, author_id: first.author_id, time: first.time, content }] };
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    assert.equal(result.floors[0].comment.content, '哈喽 你猜我是谁');
+    assert.equal(result.floors[0].sub_comment_list?.[0].content, '哈喽 你猜我是谁');
+    assert.equal(result.floors.find(f => f.index === 21)?.sub_comment_list?.[0].content, '哈喽 你猜我是谁');
+    assert.deepEqual(result.warnings, []);
+});
+
 test('obsolete Flash players are ignored without losing adjacent text or accepting other media', async () => {
     const player = { type: 5, text: 'http://box.baidu.com/widget/flash/bdspacesong.swf?from=tieba&url=&name=&artist=&song_id=2342867&extra=&autoPlay=false&loop=true' };
     const content = [{ type: 0, text: '水墨丹青 - 李玉刚\n' }, player, { type: 0, text: '下一段' }];
