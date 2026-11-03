@@ -537,11 +537,13 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
     let attempts = 0;
     const runner = create_runner(async function* (_context, _url, _post, before) {
         await before?.(); attempts++;
-        if (attempts) { throw new Error('HTTP 429'); }
-        yield Buffer.alloc(0);
+        // Other requests may already be in flight when the error and file cleanup finish.
+        await new Promise(resolve => setTimeout(resolve, 25));
+        yield await Promise.reject(new Error('HTTP 429'));
     }, new RequestPacer(0), new RequestPacer(5), async () => context);
     await assert.rejects(runner(queue.list()[0], root, progress, signal), /HTTP 429/);
-    assert.equal(attempts, 1, 'Stop further image requests after the first failure');
+    assert(attempts >= 1 && attempts <= config.image_concurrency,
+        'Only the in-flight batch may finish; never start a new batch after a failure');
 });
 
 test('verified unavailable original produces a complete job with a note in the archive', async () => {
