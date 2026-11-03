@@ -6,7 +6,7 @@ export interface HttpResponse {
     ok(): boolean;
     headers(): Record<string, string>;
     text(): Promise<string>;
-    body(): Promise<Buffer>;
+    stream(): AsyncIterable<Uint8Array>;
     dispose(): Promise<void>;
 }
 interface Options { headers?: Record<string, string>; form?: Record<string, string>; timeout?: number }
@@ -49,7 +49,20 @@ export async function open_http_session(signal: AbortSignal, send: typeof fetch 
         response.headers.forEach((value, name) => { response_headers[name] = value; });
         return { status: () => response.status, ok: () => response.ok,
             headers: () => response_headers, text: () => response.text().catch(error => transport_error(error, true)),
-            body: async () => Buffer.from(await response.arrayBuffer().catch(error => transport_error(error, true))),
+            stream: async function* () {
+                const reader = response.body?.getReader();
+                if (!reader) { return; }
+                try {
+                    while (true) {
+                        const part = await reader.read().catch(error => transport_error(error, true));
+                        if (part.done) { break; }
+                        yield part.value;
+                    }
+                } finally {
+                    await reader.cancel().catch(() => undefined);
+                    reader.releaseLock();
+                }
+            },
             dispose: async () => { if (!response.bodyUsed) { await response.body?.cancel(); } },
         };
     };

@@ -1,59 +1,35 @@
-/**
- * Create tar archive from files.
- */
-export async function create_tar(files: { [filename: string]: string | Blob }): Promise<Blob> {
-    const chunks: Uint8Array[] = [];
-    const encoder = new TextEncoder();
+import { createReadStream, createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
-    for (const [filename, content] of Object.entries(files)) {
-        // Get file size and data
-        let file_data: Uint8Array;
-        let file_size: number;
+export interface ArchiveFile { path: string; size: number }
+const BUFFER_SIZE = 1024 * 1024;
 
-        if (typeof content === 'string') {
-            file_data = encoder.encode(content);
-            file_size = file_data.length;
-        } else {
-            file_data = await blob_to_uint8array(content);
-            file_size = file_data.length;
+/** Write TAR sequentially with backpressure; image bytes never accumulate in memory. */
+export async function write_tar(target: string, files: Record<string, string | ArchiveFile>, signal?: AbortSignal): Promise<void> {
+    async function* chunks() {
+        for (const [filename, content] of Object.entries(files)) {
+            signal?.throwIfAborted();
+            const text = typeof content === 'string' ? Buffer.from(content) : undefined;
+            const size = text ? text.length : (content as ArchiveFile).size;
+            yield create_tar_header(filename, size);
+            if (text) { yield text; }
+            else {
+                let read = 0;
+                for await (const chunk of createReadStream((content as ArchiveFile).path, { highWaterMark: BUFFER_SIZE, signal })) {
+                    read += chunk.length;
+                    if (read > size) { throw new Error(`打包期间文件大小发生变化: ${filename}`); }
+                    yield chunk as Buffer;
+                }
+                if (read !== size) { throw new Error(`打包期间文件大小发生变化: ${filename}`); }
+            }
+            const padding = (512 - size % 512) % 512;
+            if (padding) { yield Buffer.alloc(padding); }
         }
-
-        // Create tar header
-        const header = create_tar_header(filename, file_size);
-        chunks.push(header);
-
-        // Add file data
-        chunks.push(file_data);
-
-        // Add padding to 512-byte boundary
-        const padding_needed = (512 - (file_size % 512)) % 512;
-        if (padding_needed > 0) {
-            chunks.push(new Uint8Array(padding_needed));
-        }
-
+        yield Buffer.alloc(1024);
     }
-
-    // Add end marker (two 512-byte zero blocks)
-    chunks.push(new Uint8Array(1024));
-
-    // Combine all chunks
-    const total_size = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const combined = new Uint8Array(total_size);
-    let offset = 0;
-    for (const chunk of chunks) {
-        combined.set(chunk, offset);
-        offset += chunk.length;
-    }
-
-    return new Blob([combined], { type: 'application/x-tar' });
-}
-
-/**
- * Convert blob to Uint8Array.
- */
-async function blob_to_uint8array(blob: Blob): Promise<Uint8Array> {
-    const buffer = await blob.arrayBuffer();
-    return new Uint8Array(buffer);
+    await pipeline(Readable.from(chunks(), { objectMode: false, highWaterMark: BUFFER_SIZE }),
+        createWriteStream(target, { highWaterMark: BUFFER_SIZE }), { signal });
 }
 
 /**

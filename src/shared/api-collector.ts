@@ -16,6 +16,12 @@ export interface EmptyContentLocation {
     reply_id?: number;
     reason: 'missing' | 'null' | 'empty_array' | 'empty_string';
 }
+export interface UnlocatedFoldSummary {
+    thread_id: number;
+    page_count: number;
+    floor_count: number;
+    fold_comment_num?: number;
+}
 type RecordValue = Record<string, unknown>;
 
 function empty_content_reason(value: unknown): EmptyContentLocation['reason'] | undefined {
@@ -202,6 +208,7 @@ export async function collect_api(
     progress: (value: Progress) => Promise<void>,
     signal: AbortSignal, max_pages = 200,
     on_empty_content?: (location: EmptyContentLocation) => Promise<void>,
+    on_unlocated_fold?: (summary: UnlocatedFoldSummary) => Promise<void>,
 ): Promise<Collection> {
     const users = new Map<number, RecordValue>();
     const raw_floors: RecordValue[] = [];
@@ -226,6 +233,7 @@ export async function collect_api(
     let last_pid: number | undefined;
     let finished = false;
     let has_fold_comment = false;
+    let fold_comment_num: number | undefined;
     let found_fold_content = false;
     const collection: CollectionProgress = { pages: { current: 0, complete: false } };
     const report = (value: Omit<Progress, 'collection'>) => progress({
@@ -246,7 +254,10 @@ export async function collect_api(
         if (integer(thread.id, 'thread.id', 1) !== post_id) { throw new Error('接口返回的贴子 ID 不匹配'); }
         if (flag(thread.is_partial_visible, 'thread.is_partial_visible')) { throw new Error('接口标记贴子仅部分内容可见，无法完整备份'); }
         // The summary does not identify a floor or imply that its body is unavailable.
-        has_fold_comment = flag(result.has_fold_comment, 'has_fold_comment') || has_fold_comment;
+        const page_has_fold_comment = flag(result.has_fold_comment, 'has_fold_comment');
+        has_fold_comment ||= page_has_fold_comment;
+        const fold_count = Number(result.fold_comment_num);
+        if (page_has_fold_comment && Number.isSafeInteger(fold_count) && fold_count >= 0) { fold_comment_num = fold_count; }
         for (const value of array(result.user_list, 'user_list')) {
             const user = object(value, 'user');
             const id = integer(user.id, 'user.id', 1);
@@ -341,7 +352,10 @@ export async function collect_api(
         }
     }
     if (has_fold_comment && !found_fold_content) {
-        throw new Error('接口标记存在折叠内容，但遍历楼层后未返回具体折叠楼层，无法定位楼层及完整备份');
+        // A summary flag alone does not prove that a visible floor is missing.
+        // Report it only after pagination completes; actual content errors still fail.
+        await on_unlocated_fold?.({ thread_id: post_id, page_count: collection.pages.current,
+            floor_count: raw_floors.length, ...(fold_comment_num !== undefined ? { fold_comment_num } : {}) });
     }
     let remaining_replies = raw_floors.reduce((sum, raw) => sum + integer(raw.sub_post_number, `第 ${raw.floor} 楼（post_id=${raw.id}）sub_post_number`), 0);
     let completed_replies = 0;

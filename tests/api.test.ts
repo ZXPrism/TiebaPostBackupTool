@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp } from 'node:fs/promises';
+import { readFile, mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -442,7 +442,6 @@ test('API refuses stalled pagination, inconsistent individual responses, hidden 
             const posts = data.post_list as unknown[];
             posts.push(posts[0]);
         }, /第 21 楼.*单次响应.*重复回复 ID/],
-        [(r: typeof fixtures) => { r[0].response.has_fold_comment = 1; }, /折叠内容/],
         [(r: typeof fixtures) => { (r[0].response.thread as Record<string, unknown>).is_partial_visible = 1; }, /部分内容可见/],
         [(r: typeof fixtures) => { (r[0].response.first_floor as Record<string, unknown>).content = [{ type: 99 }]; }, /第 1 楼.*type=99/],
         [(r: typeof fixtures) => {
@@ -476,13 +475,13 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
         } },
     } as unknown as HttpSession;
     let image_count = 0, active_images = 0, peak_images = 0;
-    const download = async (_context: HttpSession, _url: string, _post: string, before?: () => Promise<void>) => {
+    const download = async function* (_context: HttpSession, _url: string, _post: string, before?: () => Promise<void>) {
         await before?.();
         image_count++;
         peak_images = Math.max(peak_images, ++active_images);
         await new Promise(resolve => setTimeout(resolve, 50));
         active_images--;
-        return new Blob(['synthetic-image'], { type: 'image/png' });
+        yield Buffer.from('synthetic-image');
     };
     const queue = new JobQueue(root, create_runner(download, new RequestPacer(0), new RequestPacer(1), async () => context));
     await queue.initialize();
@@ -536,8 +535,10 @@ test('API service runner creates real JSON/viewer/TAR through the queue without 
     } finally { await queue.close(); }
 
     let attempts = 0;
-    const runner = create_runner(async (_context, _url, _post, before) => {
-        await before?.(); attempts++; throw new Error('HTTP 429');
+    const runner = create_runner(async function* (_context, _url, _post, before) {
+        await before?.(); attempts++;
+        if (attempts) { throw new Error('HTTP 429'); }
+        yield Buffer.alloc(0);
     }, new RequestPacer(0), new RequestPacer(5), async () => context);
     await assert.rejects(runner(queue.list()[0], root, progress, signal), /HTTP 429/);
     assert.equal(attempts, 1, 'Stop further image requests after the first failure');
@@ -554,9 +555,9 @@ test('verified unavailable original produces a complete job with a note in the a
         request: { post: async () => ({ status: () => 200, text: async () => JSON.stringify(response), dispose: async () => undefined }) },
     } as unknown as HttpSession;
     const root = await mkdtemp(join(tmpdir(), 'tieba-api-missing-original-'));
-    const queue = new JobQueue(root, create_runner(async (_context, url) => {
+    const queue = new JobQueue(root, create_runner(async function* (_context, url) {
         assert(!url.includes('shoubai_emoji_face_365'), 'Do not download a known missing original');
-        return new Blob(['synthetic-avatar'], { type: 'image/png' });
+        yield Buffer.from('synthetic-avatar');
     }, new RequestPacer(0), new RequestPacer(0), async () => context));
     await queue.initialize();
     try {
@@ -596,7 +597,7 @@ test('recorded empty floor completes a backup and writes its exact location to t
         request: { post: async () => ({ status: () => 200, text: async () => JSON.stringify(response), dispose: async () => undefined }) },
     } as unknown as HttpSession;
     const root = await mkdtemp(join(tmpdir(), 'tieba-api-empty-content-'));
-    const queue = new JobQueue(root, create_runner(async () => new Blob(['avatar'], { type: 'image/png' }),
+    const queue = new JobQueue(root, create_runner(async function* () { yield Buffer.from('avatar'); },
         new RequestPacer(0), new RequestPacer(0), async () => context));
     await queue.initialize();
     try {
@@ -852,11 +853,11 @@ test('native HTTP backend backs up fixtures and scopes the environment cookie', 
         const post = JSON.parse(await readFile(join(root, 'post.json'), 'utf8')) as Post;
         assert.equal(post.floor_list.length, 28);
         const expected_collection = await collect_api(baseline.id, replay().request, progress, signal);
-        const { ImageHandler } = await import('../src/image_handler');
+        const { ImageHandler, remap_image_names } = await import('../src/image_handler');
         const images = new ImageHandler();
         const expected = finalize_post(expected_collection.metadata, expected_collection.floors, images);
-        await images.deduplicate_images(expected, Object.fromEntries(Object.values(expected.image_map ?? {})
-            .map(name => [name, new Blob(['synthetic-image'], { type: 'image/png' })])));
+        const names = Object.values(expected.image_map ?? {});
+        remap_image_names(expected, new Map(names.map(name => [name, names[0]])));
         assert.deepEqual({ ...post, backup_date: undefined }, { ...expected, backup_date: undefined },
             'Switching the HTTP transport must preserve every collected field');
         assert.equal(content_requests, 5);
@@ -1073,6 +1074,73 @@ test('fold summary does not hide content errors and the exact floor is persisted
     } finally { await queue.close(); }
 });
 
+test('unlocated fold summary is logged once and the full worker completes nested replies, images and archive', async () => {
+    const records = structuredClone(fixtures);
+    for (const record of records.filter(r => r.path === '/c/f/pb/page_pc')) {
+        record.response.has_fold_comment = 1;
+        record.response.fold_comment_num = 1;
+    }
+    const { request, calls } = replay(records);
+    const context = {
+        close: async () => undefined,
+        request: { post: async (url: string, options: { form: Record<string, string> }) => {
+            const data = await request(new URL(url).pathname as Parameters<ApiRequest>[0], options.form);
+            return { status: () => 200, text: async () => JSON.stringify({ error_code: 0, data }), dispose: async () => undefined };
+        } },
+    } as unknown as HttpSession;
+    const root = await mkdtemp(join(tmpdir(), 'tieba-fold-summary-'));
+    const queue = new JobQueue(root, create_runner(async function* () { yield Buffer.from('image'); },
+        new RequestPacer(0), new RequestPacer(0), async () => context));
+    await queue.initialize();
+    try {
+        const job = await queue.submit(String(baseline.id));
+        const deadline = Date.now() + 10000;
+        while (!['complete', 'partial', 'failed'].includes(job.status) && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.equal(job.status, 'complete', job.error || 'Job did not complete');
+        await queue.close();
+        assert.deepEqual(job.warnings, [], 'A diagnostic log must not mark the backup partial');
+        assert.equal(calls.length, 5, 'Continue all nested pages without extra requests');
+        const post = JSON.parse(await readFile(join(root, job.id, 'post.json'), 'utf8')) as Post;
+        assert.deepEqual(post.floor_list.map(f => f.index), baseline.floor_list.map(f => f.index));
+        assert.deepEqual(post.floor_list.map(f => f.sub_comment_list?.length || 0), baseline.floor_list.map(f => f.sub_comment_list?.length || 0));
+        assert((await readFile(join(root, job.id, 'backup.tar'))).length > 0);
+        assert((await readFile(join(root, job.id, 'backup.tar.http.gzip'))).length > 0);
+        for (const path of [join(root, 'service.log'), join(root, job.id, 'job.log')]) {
+            const rows = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+            const logs = rows.filter(row => row.event === 'api_fold_summary_unresolved');
+            assert.equal(logs.length, 1);
+            assert.equal(logs[0].level, 'warn');
+            assert.equal(logs[0].job_id, job.id);
+            assert.deepEqual(logs[0].detail, { thread_id: baseline.id, page_count: 2, floor_count: 28, fold_comment_num: 1,
+                message: '接口标记存在折叠内容，但遍历楼层后未返回具体折叠楼层，继续备份已返回内容' });
+        }
+    } finally { await queue.close(); }
+});
+
+test('unlocated fold logging does not apply to resolved summaries or hide pagination, content and visibility failures', async () => {
+    for (const scenario of ['normal', 'folded', 'pagination', 'content', 'partial']) {
+        const records = structuredClone(fixtures);
+        const logs: unknown[] = [];
+        if (scenario !== 'normal') { records[0].response.has_fold_comment = 1; }
+        if (scenario === 'folded') { (records[1].response.post_list as Record<string, unknown>[])[0].is_fold = 2; }
+        if (scenario === 'pagination') {
+            records[1].response.post_list = [];
+            (records[1].response.page as Record<string, unknown>).has_more = 1;
+        }
+        if (scenario === 'content') { (records[0].response.first_floor as Record<string, unknown>).content = [{ type: 99 }]; }
+        if (scenario === 'partial') { (records[0].response.thread as Record<string, unknown>).is_partial_visible = 1; }
+        const pending = collect_api(baseline.id, replay(records).request, progress, signal, 200, undefined,
+            async summary => { logs.push(summary); });
+        if (scenario === 'pagination') { await assert.rejects(pending, /还有下一页.*列表为空/); }
+        else if (scenario === 'content') { await assert.rejects(pending, /第 1 楼.*type=99/); }
+        else if (scenario === 'partial') { await assert.rejects(pending, /部分内容可见/); }
+        else { await pending; }
+        assert.deepEqual(logs, []);
+    }
+});
+
 test('content and author failures identify the main floor and the exact nested reply', async () => {
     for (const scenario of ['embedded', 'nested', 'nested_author', 'floor_author']) {
         const records = structuredClone(fixtures);
@@ -1233,8 +1301,15 @@ test('image body interruptions retry through the image pacer, stop after three r
                 if (starts.length === 2) {
                     throw new TypeError('Cookie: synthetic-secret', { cause: { code: 'ECONNRESET' } });
                 }
-                const body = new ReadableStream<Uint8Array>({ start(stream) {
-                    stream.enqueue(new TextEncoder().encode('truncated-image-bytes'));
+                let first = true;
+                const body = new ReadableStream<Uint8Array>({ async pull(stream) {
+                    if (first) {
+                        first = false;
+                        stream.enqueue(new TextEncoder().encode('truncated-image-bytes'));
+                        return;
+                    }
+                    // Let bytes reach the file before the connection fails; retries must truncate it.
+                    await new Promise(resolve => setTimeout(resolve, 10));
                     stream.error(new TypeError('terminated Cookie: synthetic-secret', { cause: { code: 'UND_ERR_SOCKET' } }));
                 } });
                 return new Response(body, { headers: { 'content-type': 'image/jpeg' } });
@@ -1264,9 +1339,51 @@ test('image body interruptions retry through the image pacer, stop after three r
             assert.equal(logs.filter(row => row.event === 'image_retry').length,
                 scenario === 'http404' ? 0 : scenario === 'cancel' ? 1 : 3);
             assert(!JSON.stringify(logs).includes('synthetic-secret'));
+            const remaining = await readdir(root);
+            assert(!remaining.includes('images.tmp'));
+            assert(!remaining.includes('backup.tar.tmp'));
+            assert.equal(remaining.includes('backup.tar'), scenario === 'recover');
         }
     } finally {
         if (previous === undefined) { delete process.env.TIEBA_COOKIE; } else { process.env.TIEBA_COOKIE = previous; }
+    }
+});
+
+test('worker waits for concurrent writes and cleans image files on download failure or packaging cancellation', async () => {
+    for (const scenario of ['failure', 'cancel_pack']) {
+        const response = structuredClone(fixtures[0].response);
+        Object.assign(response.page as object, { has_more: 0, total_page: 1 });
+        Object.assign(response.first_floor as object, { content: [{ type: 2, text: 'image_emoticon1', c: '微笑' }],
+            sub_post_number: 0, sub_post_list: { sub_post_list: [] } });
+        response.post_list = [];
+        const context = {
+            close: async () => undefined,
+            request: { post: async () => ({ status: () => 200, text: async () => JSON.stringify(response), dispose: async () => undefined }) },
+        } as unknown as HttpSession;
+        const root = await mkdtemp(join(tmpdir(), 'tieba-image-cleanup-'));
+        const controller = new AbortController();
+        let started = 0, active = 0;
+        const runner = create_runner(async function* () {
+            const index = started++;
+            active++;
+            try {
+                yield Buffer.from('partial');
+                await new Promise(resolve => setTimeout(resolve, index ? 20 : 5));
+                if (scenario === 'failure' && !index) { throw new Error('image failed'); }
+                yield Buffer.from('complete');
+            } finally { active--; }
+        }, new RequestPacer(0), new RequestPacer(0), async () => context);
+        const job = { id: 'cleanup', post_id: baseline.id, url: `https://tieba.baidu.com/p/${baseline.id}`,
+            status: 'running' as const, created_at: '', updated_at: '', progress: { stage: '' }, warnings: [] };
+        await assert.rejects(runner(job, root, async value => {
+            if (value.stage === '打包文件') { controller.abort(new Error('cancel packing')); }
+        }, controller.signal), scenario === 'failure' ? /image failed/ : /cancel packing/);
+        assert.equal(started, 2, 'Avatar and emoji must both have started writing');
+        assert.equal(active, 0, 'Cleanup must wait for in-flight downloads');
+        const remaining = await readdir(root);
+        assert(!remaining.includes('images.tmp'));
+        assert(!remaining.includes('backup.tar.tmp'));
+        assert(!remaining.includes('backup.tar'));
     }
 });
 

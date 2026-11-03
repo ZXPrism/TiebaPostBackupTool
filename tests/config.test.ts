@@ -82,7 +82,7 @@ test('startup requires the selected JSON and reads explicit values instead of le
 test('API attempts and image batches honor configured retry, timeout and concurrency values', async () => {
     const { config } = await import('../src/service/config');
     const { create_api_request, RequestPacer } = await import('../src/service/api');
-    const { ImageHandler } = await import('../src/image_handler');
+    const { save_image, save_images } = await import('../src/service/images');
     const previous = { retries: config.api_max_retries, timeout: config.request_timeout_ms };
     let attempts = 0;
     try {
@@ -93,7 +93,7 @@ test('API attempts and image batches honor configured retry, timeout and concurr
                 attempts++;
                 assert.equal(options.timeout, 1234);
                 return { status: () => 503, ok: () => false, headers: () => ({}),
-                    text: async () => '', body: async () => Buffer.alloc(0), dispose: async () => {} };
+                    text: async () => '', stream: async function* () { yield Buffer.alloc(0); }, dispose: async () => {} };
             },
             async get() { throw new Error('unexpected GET'); },
         }, 'https://tieba.baidu.com/p/123', new RequestPacer(0), new AbortController().signal);
@@ -105,13 +105,24 @@ test('API attempts and image batches honor configured retry, timeout and concurr
     }
 
     let current = 0, peak = 0;
-    const handler = new ImageHandler(async () => {
-        peak = Math.max(peak, ++current);
-        await new Promise(resolve => setTimeout(resolve, 5));
-        current--;
-        return new Blob(['image'], { type: 'image/png' });
-    }, { 'https://example.com/1': '1.png', 'https://example.com/2': '2.png', 'https://example.com/3': '3.png' }, 2, 0);
-    const result = await handler.download_images();
-    assert.equal(peak, 2);
-    assert.equal(Object.keys(result).length, 3);
+    const root = await mkdtemp(join(tmpdir(), 'tieba-image-config-'));
+    const post = JSON.parse(await readFile('tests/regression/post.json', 'utf8'));
+    post.image_map = { 'https://example.com/1': '1.png', 'https://example.com/2': '2.png', 'https://example.com/3': '3.png' };
+    post.floor_list = [];
+    const previous_images = { concurrency: config.image_concurrency, delay: config.image_batch_delay_ms };
+    config.image_concurrency = 2; config.image_batch_delay_ms = 0;
+    const signal = new AbortController().signal;
+    try {
+        const result = await save_images(post, root, async (url, path) => {
+            peak = Math.max(peak, ++current);
+            await new Promise(resolve => setTimeout(resolve, 5));
+            const image = await save_image((async function* () { yield Buffer.from(url); })(), path, signal);
+            current--;
+            return image;
+        }, async () => undefined, signal);
+        assert.equal(peak, 2);
+        assert.equal(Object.keys(result).length, 3);
+    } finally {
+        config.image_concurrency = previous_images.concurrency; config.image_batch_delay_ms = previous_images.delay;
+    }
 });

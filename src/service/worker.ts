@@ -1,6 +1,6 @@
 import { create_viewer_html } from '../viewer';
-import { create_tar } from '../archive';
-import { mkdir, writeFile, rename } from 'node:fs/promises';
+import { write_tar, type ArchiveFile } from '../archive';
+import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { finalize_post } from '../shared/post';
 import { ImageHandler } from '../image_handler';
@@ -12,6 +12,7 @@ import type { Job, Progress } from './model';
 import { prepare_downloads } from './compression';
 import type { Log } from './logging';
 import { HttpTransportError, open_http_session, type HttpSession } from './transport';
+import { save_image, save_images } from './images';
 
 export interface WorkerResult {
     title?: string;
@@ -24,7 +25,7 @@ export interface WorkerResult {
 
 export type Runner = (job: Job, directory: string, progress: (value: Progress) => Promise<void>, signal: AbortSignal, log?: Log) => Promise<WorkerResult>;
 
-async function fetch_image(context: HttpSession, original: string, post_url: string, before_request?: () => Promise<void>): Promise<Blob> {
+async function* fetch_image(context: HttpSession, original: string, post_url: string, before_request?: () => Promise<void>): AsyncGenerator<Uint8Array> {
     let url = new URL(original, post_url).href;
     for (let redirects = 0; redirects < 5; redirects++) {
         if (!allowed_url(url)) { throw new Error('图片地址不在允许的域名内'); }
@@ -42,16 +43,15 @@ async function fetch_image(context: HttpSession, original: string, post_url: str
             if (!response.ok()) { throw new Error(`图片 HTTP ${response.status()}`); }
             const type = response.headers()['content-type'] || '';
             if (!type.startsWith('image/')) { throw new Error('图片响应不是图像'); }
-            const bytes = await response.body();
-            if (!bytes.length || bytes.length > config.max_image_bytes) { throw new Error(`图片为空或超过 ${config.max_image_bytes} 字节`); }
-            return new Blob([new Uint8Array(bytes)], { type });
+            yield* response.stream();
+            return;
         } finally { await response.dispose(); }
     }
     throw new Error('图片重定向次数过多');
 }
 
 export function create_runner(
-    download: typeof fetch_image = fetch_image,
+    download: (context: HttpSession, original: string, post_url: string, before_request?: () => Promise<void>) => AsyncIterable<Uint8Array> = fetch_image,
     pacer = new RequestPacer(config.api_request_interval_ms),
     image_pacer = new RequestPacer(config.image_request_interval_ms),
     http_session = open_http_session,
@@ -59,22 +59,32 @@ export function create_runner(
     return async (job, directory, progress, signal, log) => {
         signal.throwIfAborted();
         const context = await http_session(signal);
+        const image_directory = join(directory, 'images.tmp');
         const abort = () => { void context.close().catch(() => undefined); };
         signal.addEventListener('abort', abort, { once: true });
         try {
             signal.throwIfAborted();
             const { floors, warnings, notes, metadata } = await collect_api(job.post_id,
                 create_api_request(context.request, job.url, pacer, signal, log), progress, signal, config.max_api_pages,
-                async location => { await log?.('warn', 'api_content_empty', location); });
+                async location => { await log?.('warn', 'api_content_empty', location); },
+                async summary => { await log?.('warn', 'api_fold_summary_unresolved', { ...summary,
+                    message: '接口标记存在折叠内容，但遍历楼层后未返回具体折叠楼层，继续备份已返回内容' }); });
             let image_error: unknown;
-            const images = new ImageHandler(async url => {
+            const images = new ImageHandler();
+            const post = finalize_post(metadata, floors, images);
+            await mkdir(directory, { recursive: true });
+            await writeFile(join(directory, 'post.json'), JSON.stringify(post, null, 2));
+            const download_count = Object.keys(post.image_map || {}).length;
+            await progress({ stage: '下载图片', current: 0, total: download_count });
+            let updates = Promise.resolve();
+            const saved_images = await save_images(post, image_directory, async (url, path) => {
                 signal.throwIfAborted();
                 for (let retries = 0; ; retries++) {
                     try {
                         // Retried requests and redirects use the same image pacer as first attempts.
-                        return await download(context, url, job.url, () => image_pacer.run(async () => {
+                        return await save_image(download(context, url, job.url, () => image_pacer.run(async () => {
                             if (image_error) { throw image_error; }
-                        }, signal));
+                        }, signal)), path, signal);
                     } catch (error) {
                         signal.throwIfAborted();
                         if (!image_error && error instanceof HttpTransportError && retries < 3) {
@@ -91,41 +101,27 @@ export function create_runner(
                         throw image_error;
                     }
                 }
-            }, {}, config.image_concurrency, config.image_batch_delay_ms);
-            const post = finalize_post(metadata, floors, images);
-            await mkdir(directory, { recursive: true });
-            await writeFile(join(directory, 'post.json'), JSON.stringify(post, null, 2));
-            const download_count = Object.keys(post.image_map || {}).length;
-            await progress({ stage: '下载图片', current: 0, total: download_count });
-            // Serialize asynchronous progress writes even though images are fetched in batches.
-            let updates = Promise.resolve();
-            let update_error: unknown;
-            const downloaded_images = await images.download_images((current, total) => {
-                updates = updates.then(() => progress({ stage: '下载图片', current, total }))
-                    .catch(error => { update_error = error; });
+            }, (current, total) => {
+                updates = updates.then(() => progress({ stage: '下载图片', current, total }));
+                return updates;
             }, signal);
-            await updates;
-            if (update_error) { throw update_error; }
-            if (image_error) { throw image_error; }
             signal.throwIfAborted();
             await progress({ stage: '整理图片' });
-            const blobs = await images.deduplicate_images(post, downloaded_images, signal);
-            const image_count = Object.keys(blobs).length;
+            const image_count = Object.keys(saved_images).length;
             post.backup_date = new Date().toISOString();
             await writeFile(join(directory, 'post.json.tmp'), JSON.stringify(post, null, 2));
             await rename(join(directory, 'post.json.tmp'), join(directory, 'post.json'));
-            warnings.push(...images.failed_images.map(name => `图片下载失败（已用占位图替代）: ${name}`));
             await progress({ stage: '打包文件' });
-            const files: Record<string, string | Blob> = {
+            const files: Record<string, string | ArchiveFile> = {
                 'post.json': JSON.stringify(post, null, 2),
                 'viewer.html': create_viewer_html(post),
                 'report.json': JSON.stringify({ backend: 'api', warnings, notes, floor_count: floors.length, image_count }, null, 2),
             };
-            for (const [name, blob] of Object.entries(blobs)) { files[`images/${name}`] = blob; }
-            const archive = await create_tar(files);
+            for (const [name, file] of Object.entries(saved_images)) { files[`images/${name}`] = file; }
+            await write_tar(join(directory, 'backup.tar.tmp'), files, signal);
             signal.throwIfAborted();
-            await writeFile(join(directory, 'backup.tar.tmp'), new Uint8Array(await archive.arrayBuffer()));
             await rename(join(directory, 'backup.tar.tmp'), join(directory, 'backup.tar'));
+            await rm(image_directory, { recursive: true, force: true });
             await progress({ stage: '准备下载文件' });
             await prepare_downloads(directory, signal);
             return {
@@ -139,6 +135,8 @@ export function create_runner(
         } finally {
             signal.removeEventListener('abort', abort);
             await context.close().catch(() => undefined);
+            await rm(image_directory, { recursive: true, force: true });
+            await rm(join(directory, 'backup.tar.tmp'), { force: true });
         }
     };
 }

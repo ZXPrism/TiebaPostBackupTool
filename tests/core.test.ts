@@ -1,15 +1,16 @@
 import { create_viewer_html } from '../src/viewer';
-import { create_tar } from '../src/archive';
+import { write_tar } from '../src/archive';
+import { save_image, save_images } from '../src/service/images';
+import { config } from '../src/service/config';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Post } from '../src/types';
 import { compare_posts, regression_report } from '../src/shared/regression';
 import { finalize_post } from '../src/shared/post';
-import { ImageHandler } from '../src/image_handler';
 import { parse_post_url, type Job } from '../src/service/model';
 import { format_remaining_time } from '../src/shared/progress';
 import { active_backup, record_progress } from '../src/service/progress';
@@ -169,7 +170,7 @@ test('user URL validation and downloaded resource allowlist', () => {
 });
 
 test('image content deduplication preserves references, source URLs and deterministic first filenames', async () => {
-    const images = new ImageHandler();
+    const root = await mkdtemp(join(tmpdir(), 'tieba-image-dedup-'));
     const post: Post = { ...baseline, image_map: {
         'https://tiebapic.baidu.com/first.png': 'image_1.png',
         'https://tiebapic.baidu.com/alias.jpg': 'image_2.jpg',
@@ -180,45 +181,56 @@ test('image content deduplication preserves references, source URLs and determin
     }, sub_comment_list: [{ author: '乙', date: '2026-10-14', avatar_url: 'image_3.png', content: '<img src="./images/image_2.jpg"><img src="./images/image_3.png">' }] }] };
     assert(post.image_map);
     const original_urls = Object.keys(post.image_map);
-    const blobs = {
-        'image_3.png': new Blob(['different'], { type: 'image/png' }),
-        'image_2.jpg': new Blob(['identical'], { type: 'image/jpeg' }),
-        'image_1.png': new Blob(['identical'], { type: 'image/png' }),
-    };
-    const unique = await images.deduplicate_images(post, blobs);
+    const data: Record<string, string> = { 'image_3.png': 'different', 'image_2.jpg': 'identical', 'image_1.png': 'identical' };
+    const signal = new AbortController().signal;
+    const unique = await save_images(post, root, async (url, path) => {
+        const name = post.image_map?.[url];
+        assert(name);
+        // A later alias finishes before the first source, but must not choose the filename.
+        if (name === 'image_1.png') { await new Promise(resolve => setTimeout(resolve, 20)); }
+        return save_image((async function* () { yield Buffer.from(data[name]); })(), path, signal);
+    }, async () => undefined, signal);
     assert.deepEqual(Object.keys(unique), ['image_1.png', 'image_3.png']);
-    assert.equal(unique['image_1.png'], blobs['image_1.png']);
+    assert.equal(await readFile(unique['image_1.png'].path, 'utf8'), 'identical');
+    assert.deepEqual((await readdir(root)).sort(), ['image_1.png', 'image_3.png']);
     assert.deepEqual(Object.keys(post.image_map), original_urls);
     assert.equal(post.image_map[original_urls[1]], 'image_1.png');
     assert.equal(post.floor_list[0].comment.avatar_url, 'image_1.png');
     assert.equal(post.floor_list[0].comment.content, `image_2.jpg src="./images/image_2.jpg" <img alt="src='./images/image_2.jpg'" SRC = './images/image_1.png'>`);
     assert.equal(post.floor_list[0].sub_comment_list?.[0].content, '<img src="./images/image_1.png"><img src="./images/image_3.png">');
     assert.equal(post.floor_list[0].sub_comment_list?.[0].avatar_url, 'image_3.png');
-    const saved = structuredClone(post);
-    assert.deepEqual(await images.deduplicate_images(post, unique), unique);
-    assert.deepEqual(post, saved);
-    assert.equal(Object.keys(blobs).length, 3, 'Input blobs are not mutated');
 });
 
-test('deduplication leaves failed placeholders distinct and does not mutate a post on missing data or cancellation', async () => {
-    const images = new ImageHandler(async () => { throw new Error('offline'); }, {
-        'https://tiebapic.baidu.com/a.png': 'image_1.png', 'https://tiebapic.baidu.com/b.png': 'image_2.png',
-    });
-    const post: Post = { ...baseline, floor_list: [], image_map: {
-        'https://tiebapic.baidu.com/a.png': 'image_1.png', 'https://tiebapic.baidu.com/b.png': 'image_2.png',
-    } };
+test('image streaming enforces the size limit, removes partial files and preserves references on failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tieba-image-stream-'));
+    const signal = new AbortController().signal;
+    const post: Post = { ...baseline, floor_list: [], image_map: { 'https://tiebapic.baidu.com/a': 'a.png' } };
     const original = structuredClone(post);
-    const blobs = await images.download_images();
-    assert.equal(Object.keys(await images.deduplicate_images(post, blobs)).length, 2);
-    assert.deepEqual(images.failed_images.sort(), ['image_1.png', 'image_2.png']);
+    await assert.rejects(save_images(post, root, async (_url, path) => save_image((async function* () {
+        yield Buffer.from('partial');
+        throw new Error('interrupted body');
+    })(), path, signal), async () => undefined, signal), /interrupted body/);
     assert.deepEqual(post, original);
-    await assert.rejects(images.deduplicate_images(post, { 'image_1.png': blobs['image_1.png'] }), /缺少已下载的图片: image_2.png/);
-    assert.deepEqual(post, original);
+    assert.deepEqual(await readdir(root), []);
+    const previous = config.max_image_bytes;
+    config.max_image_bytes = 8;
+    let stopped = false;
+    try {
+        await assert.rejects(save_image((async function* () {
+            try { yield Buffer.alloc(5); yield Buffer.alloc(5); assert.fail('Must stop consuming an oversized image'); }
+            finally { stopped = true; }
+        })(), join(root, 'large.png'), signal), /超过 8 字节/);
+        assert(stopped);
+        assert.deepEqual(await readdir(root), []);
+    } finally { config.max_image_bytes = previous; }
     const controller = new AbortController();
-    const aborting = new Blob(['image']);
-    aborting.arrayBuffer = async () => { controller.abort(new Error('cancel hashing')); return new ArrayBuffer(0); };
-    await assert.rejects(new ImageHandler().deduplicate_images(post, { ...blobs, 'image_1.png': aborting }, controller.signal), /cancel hashing/);
+    await assert.rejects(save_images(post, root, async (_url, path) => save_image((async function* () {
+        yield Buffer.from('partial');
+        controller.abort(new Error('cancel saving'));
+        yield Buffer.from('remaining');
+    })(), path, controller.signal), async () => undefined, controller.signal), /abort|cancel saving/i);
     assert.deepEqual(post, original);
+    assert.deepEqual(await readdir(root), []);
 });
 
 test('image normalization supports alias filenames without concealing changes to alias groups', () => {
@@ -231,23 +243,30 @@ test('image normalization supports alias filenames without concealing changes to
     assert(compare_posts(post, renamed, true).length > 0, 'Splitting or merging alias groups remains visible');
 });
 
-test('image failures are reported, TAR has correct bytes and checksums', async () => {
-    const images = new ImageHandler(async url => {
-        if (url.endsWith('bad.png')) { throw new Error('offline'); }
-        return new Blob(['image'], { type: 'image/png' });
-    }, { 'https://tiebapic.baidu.com/ok.png': 'image_1.png', 'https://tiebapic.baidu.com/bad.png': 'image_2.png' });
-    const results = await images.download_images();
-    assert.deepEqual(images.failed_images, ['image_2.png']);
-    assert.equal(await results['image_1.png'].text(), 'image');
-    assert.equal(results['image_2.png'].type, 'image/svg+xml');
-    const tar = new Uint8Array(await (await create_tar({ 'post.json': '测试内容', 'images/image_1.png': results['image_1.png'] })).arrayBuffer());
+test('streamed TAR preserves file bytes, padding and checksums', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tieba-tar-stream-'));
+    const image = join(root, 'image.png');
+    await writeFile(image, 'image');
+    const target = join(root, 'backup.tar');
+    await write_tar(target, { 'post.json': '测试内容', 'images/image_1.png': { path: image, size: 5 } });
+    const tar = await readFile(target);
     const decoder = new TextDecoder();
     assert.equal(decoder.decode(tar.slice(0, 9)), 'post.json');
     const length = parseInt(decoder.decode(tar.slice(124, 135)), 8);
     assert.equal(decoder.decode(tar.slice(512, 512 + length)), '测试内容');
     const sum = tar.slice(0, 512).reduce((total, value, index) => total + (index >= 148 && index < 156 ? 32 : value), 0);
     assert.equal(parseInt(decoder.decode(tar.slice(148, 154)), 8), sum);
+    assert(tar.slice(512 + length, 1024).every(value => value === 0));
+    assert.equal(decoder.decode(tar.slice(1024, 1042)), 'images/image_1.png');
+    assert.equal(parseInt(decoder.decode(tar.slice(1148, 1159)), 8), 5);
+    assert.equal(decoder.decode(tar.slice(1536, 1541)), 'image');
+    assert(tar.slice(1541, 2048).every(value => value === 0));
     assert(tar.slice(-1024).every(value => value === 0));
+    assert.equal(tar.length, 3072);
+    for (const size of [4, 6]) {
+        await assert.rejects(write_tar(target, { 'image.png': { path: image, size } }), /文件大小发生变化: image.png/);
+    }
+    await assert.rejects(write_tar(target, { 'image.png': { path: image, size: 5 } }, AbortSignal.abort()), /abort/i);
 });
 
 test('queue serializes jobs, deduplicates pending posts, persists and recovers interruption', async () => {
