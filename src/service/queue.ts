@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { config } from './config';
 import { parse_post_url, type Job, type Progress } from './model';
 import type { Runner } from './worker';
-import type { Post } from '../types';
+import type { Post } from '../shared/types';
 import { ServiceLogger, type LogLevel } from './logging';
 import { remove_local_archive, type ArchiveStore } from './storage';
 import { record_progress } from './progress';

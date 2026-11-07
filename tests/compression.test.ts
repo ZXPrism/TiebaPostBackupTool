@@ -8,7 +8,7 @@ import { gunzipSync } from 'node:zlib';
 import { compressed_file, negotiate_encoding } from '../src/service/compression';
 import { create_app } from '../src/service/http';
 import { JobQueue } from '../src/service/queue';
-import { write_tar } from '../src/archive';
+import { write_tar } from '../src/service/archive';
 
 function raw(url: string, headers: Record<string, string> = {}, method = 'GET') {
     return new Promise<{ status: number | undefined; headers: IncomingHttpHeaders; bytes: Buffer }>((resolve, reject) => {

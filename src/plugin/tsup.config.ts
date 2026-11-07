@@ -1,9 +1,9 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/main.ts'],
+  entry: ['src/plugin/main.ts'],
   format: ['iife'],
-  outDir: 'dist',
+  outDir: 'dist/plugin',
   bundle: true,
   splitting: false,
   sourcemap: false,
@@ -14,7 +14,7 @@ export default defineConfig({
     js: `// ==UserScript==
 // @name         Tieba Post Backup Tool
 // @namespace    https://github.com/ZXPrism/TiebaPostBackupTool
-// @version      3.0.7
+// @version      3.0.8
 // @description  Automatically backup Tieba posts in one single click
 // @author       ZXPrism
 // @license      MIT

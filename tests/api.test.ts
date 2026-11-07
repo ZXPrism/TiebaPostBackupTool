@@ -12,7 +12,7 @@ import type { HttpClient, HttpResponse, HttpSession } from '../src/service/trans
 import { create_runner } from '../src/service/worker';
 import { JobQueue } from '../src/service/queue';
 import { config } from '../src/service/config';
-import type { Post } from '../src/types';
+import type { Post } from '../src/shared/types';
 import type { Progress } from '../src/shared/progress';
 import type { PostBackups } from '../src/shared/service-contract';
 
@@ -855,7 +855,7 @@ test('native HTTP backend backs up fixtures and scopes the environment cookie', 
         const post = JSON.parse(await readFile(join(root, 'post.json'), 'utf8')) as Post;
         assert.equal(post.floor_list.length, 28);
         const expected_collection = await collect_api(baseline.id, replay().request, progress, signal);
-        const { ImageHandler, remap_image_names } = await import('../src/image_handler');
+        const { ImageHandler, remap_image_names } = await import('../src/shared/image_handler');
         const images = new ImageHandler();
         const expected = finalize_post(expected_collection.metadata, expected_collection.floors, images);
         const names = Object.values(expected.image_map ?? {});

@@ -11,7 +11,7 @@ import { compressed_file, negotiate_encoding } from './compression';
 import { parse_post_url } from './model';
 import { active_backup } from './progress';
 import type { PostBackups, Snapshot } from '../shared/service-contract';
-import type { Post } from '../types';
+import type { Post } from '../shared/types';
 
 function post_backups(queue: JobQueue, post: { id: number; url: string }): PostBackups {
     const jobs = queue.list().filter(job => job.post_id === post.id);
@@ -161,9 +161,9 @@ export function create_app(queue: JobQueue, base_path = config.base_path) {
             json(response, 404, { error: '接口不存在' }); return;
         }
         const assets: Record<string, [string, string]> = {
-            '/': ['src/web/index.html', 'text/html; charset=utf-8'],
-            '/app.js': ['dist/web/app.js', 'text/javascript; charset=utf-8'],
-            '/style.css': ['src/web/style.css', 'text/css; charset=utf-8'],
+            '/': ['src/service/web/index.html', 'text/html; charset=utf-8'],
+            '/app.js': ['dist/service/web/app.js', 'text/javascript; charset=utf-8'],
+            '/style.css': ['src/service/web/style.css', 'text/css; charset=utf-8'],
         };
         const asset = assets[path];
         if (request.method !== 'GET' || !asset) { json(response, 404, { error: '页面不存在' }); return; }

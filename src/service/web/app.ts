@@ -1,5 +1,5 @@
-import type { ActiveBackup, BackupSummary, PostBackups, Snapshot } from '../shared/service-contract';
-import { format_remaining_time, type ProgressCount } from '../shared/progress';
+import type { ActiveBackup, BackupSummary, PostBackups, Snapshot } from '../../shared/service-contract';
+import { format_remaining_time, type ProgressCount } from '../../shared/progress';
 
 function element<T extends HTMLElement>(id: string): T {
     const value = document.getElementById(id);

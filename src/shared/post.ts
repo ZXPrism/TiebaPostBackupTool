@@ -1,5 +1,5 @@
-import type { Post, Floor } from '../types';
-import { ImageHandler } from '../image_handler';
+import type { Post, Floor } from './types';
+import { ImageHandler } from './image_handler';
 
 /** Preserve the plugin's traversal order, image names, and JSON schema. */
 export function finalize_post(

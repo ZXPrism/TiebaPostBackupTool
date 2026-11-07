@@ -5,7 +5,7 @@ import { data_dir, config } from '../src/service/config';
 import { create_runner } from '../src/service/worker';
 import { regression_report } from '../src/shared/regression';
 import { parse_post_url, type Job } from '../src/service/model';
-import type { Post } from '../src/types';
+import type { Post } from '../src/shared/types';
 
 const args = process.argv.slice(2);
 if (args.some(arg => arg.startsWith('--') && !['--normalize-images', '--strict'].includes(arg))

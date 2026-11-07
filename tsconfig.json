@@ -34,8 +34,7 @@
   "include": [
     "src/**/*",
     "scripts/**/*",
-    "tests/**/*",
-    "tsup*.ts"
+    "tests/**/*"
   ],
   "exclude": [
     "node_modules",

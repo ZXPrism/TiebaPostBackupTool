@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { ArchiveFile } from '../archive';
-import { remap_image_names } from '../image_handler';
-import type { Post } from '../types';
+import type { ArchiveFile } from './archive';
+import { remap_image_names } from '../shared/image_handler';
+import type { Post } from '../shared/types';
 import { config } from './config';
 
 export interface SavedImage extends ArchiveFile { sha256: string }

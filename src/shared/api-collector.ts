@@ -1,4 +1,4 @@
-import type { Comment, Floor, Post } from '../types';
+import type { Comment, Floor, Post } from './types';
 import type { CollectionProgress, Progress } from './progress';
 
 export type ApiPath = '/c/f/pb/page_pc' | '/c/f/pb/nestedFloor' | '/c/f/pb/floor';

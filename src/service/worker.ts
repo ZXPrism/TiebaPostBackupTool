@@ -1,9 +1,9 @@
-import { create_viewer_html } from '../viewer';
-import { write_tar, type ArchiveFile } from '../archive';
+import { create_viewer_html } from '../shared/viewer';
+import { write_tar, type ArchiveFile } from './archive';
 import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { finalize_post } from '../shared/post';
-import { ImageHandler } from '../image_handler';
+import { ImageHandler } from '../shared/image_handler';
 import { allowed_url } from './resource-url';
 import { config } from './config';
 import { collect_api } from '../shared/api-collector';

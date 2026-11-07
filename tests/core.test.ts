@@ -1,5 +1,5 @@
-import { create_viewer_html } from '../src/viewer';
-import { write_tar } from '../src/archive';
+import { create_viewer_html } from '../src/shared/viewer';
+import { write_tar } from '../src/service/archive';
 import { save_image, save_images } from '../src/service/images';
 import { config } from '../src/service/config';
 import { test } from 'node:test';
@@ -8,7 +8,7 @@ import { readFile, mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import type { Post } from '../src/types';
+import type { Post } from '../src/shared/types';
 import { compare_posts, regression_report } from '../src/shared/regression';
 import { finalize_post } from '../src/shared/post';
 import { parse_post_url, type Job } from '../src/service/model';
