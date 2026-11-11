@@ -196,6 +196,62 @@ test('green bean frog emoticons survive nested collection and offline GIF mappin
     }
 });
 
+test('default face emoticons preserve floor/reply text and use official PNG/GIF filenames', async () => {
+    const { floor, reply } = JSON.parse(await readFile('tests/regression/api-face-emoticons.json', 'utf8'));
+    const base = 'https://tb2.bdstatic.com/tb/editor/images/face/';
+    const image = (filename: string) => `<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${base}${filename}">`;
+    const expected_floor = `${image('i_f03.png')}马`;
+    const expected_reply = `彻夜流香的文笔我喜欢${image('i_f13.png')}，是个很久之前就在看的作者了`;
+    assert.equal(render_api_content(floor.content), expected_floor);
+    assert.equal(render_api_content(reply.content), expected_reply);
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = floor.content;
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = reply.content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    for (const [filename, actual, expected] of [
+        ['i_f03.png', post.floor_list[0].comment.content, expected_floor],
+        ['i_f13.png', post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, expected_reply],
+    ] as const) {
+        const local = post.image_map?.[base + filename];
+        assert(local?.endsWith('.png'));
+        assert.equal(actual, expected.replace(base + filename, `./images/${local}`));
+    }
+    for (let id = 1; id <= 70; id++) {
+        const name = `i_f${String(id).padStart(2, '0')}`;
+        // Official getEmotionFileName switches to animated GIF at 51, even
+        // though static PNG alternatives also exist for some of these IDs.
+        const filename = `${name}.${id >= 51 ? 'gif' : 'png'}`;
+        assert.equal(render_api_content([{ type: 2, text: name }]), image(filename));
+    }
+    for (const name of ['i_f00', 'i_f71', 'i_f3', 'i_f003', 'I_f03', 'i_f03.png', 'i_f03/../x', 'i_f03" onerror="x']) {
+        assert.throws(() => render_api_content([{ type: 2, text: name }]), /尚未支持/);
+    }
+});
+
+test('shadow emoticons preserve mentions and animated images in nested replies', async () => {
+    const { content } = JSON.parse(await readFile('tests/regression/api-shadow-emoticon.json', 'utf8'));
+    const url = 'https://tb2.bdstatic.com/tb/editor/images/shadow/yz_006.gif';
+    const expected = `回复<a href="https://tieba.baidu.com/home/main?id=0000e5b9bbe79089e5bdb10000" class="at">@幻琉影</a> :<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${url}">`;
+    assert.equal(render_api_content(content), expected);
+    const records = structuredClone(fixtures);
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    const filename = post.image_map?.[url];
+    assert(filename?.endsWith('.gif'));
+    assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, expected.replace(url, `./images/${filename}`));
+    for (let id = 1; id <= 46; id++) {
+        const name = `yz_0${String(id).padStart(2, '0')}`;
+        assert(render_api_content([{ type: 2, text: name }]).includes(`/shadow/${name}.gif`));
+    }
+    for (const name of ['yz_000', 'yz_047', 'yz_06', 'yz_0006', 'YZ_006', 'yz_006.gif', 'yz_006/../x']) {
+        assert.throws(() => render_api_content([{ type: 2, text: name }]), /尚未支持/);
+    }
+});
+
 test('recorded meme image preserves the body source and dimensions in floors and nested replies', async () => {
     const { content } = JSON.parse(await readFile('tests/regression/api-meme-content.json', 'utf8'));
     const item = content[0];

@@ -87,9 +87,17 @@ const legacy_emoticons = [
     { prefix: 'bearchildren_', count: 60, folder: 'bearchildren' },
     { prefix: 'B_00', count: 63, folder: 'bobo' },
     { prefix: 'w_00', count: 53, folder: 'ldw' },
+    { prefix: 'yz_0', count: 46, folder: 'shadow' },
 ];
 
 function emoticon_url(name: string): string {
+    const face = name.match(/^i_f(\d{2})$/);
+    if (face && Number(face[1]) >= 1 && Number(face[1]) <= 70) {
+        // UeditorEmotion's default pack uses PNG, except IDs 51–70 use GIF
+        // through its getEmotionFileName rule (same official source as above).
+        const extension = Number(face[1]) >= 51 ? 'gif' : 'png';
+        return `https://tb2.bdstatic.com/tb/editor/images/face/${name}.${extension}`;
+    }
     for (const { prefix, count, folder } of legacy_emoticons) {
         if (!name.startsWith(prefix)) { continue; }
         const index = name.slice(prefix.length);
