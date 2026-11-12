@@ -1,0 +1,17 @@
+{
+  "thread_id": 2882056545,
+  "floor": 230,
+  "post_id": 46562198585,
+  "content": [
+    {
+      "show_original_btn": 1,
+      "cdn_src_active": "http://c.tieba.baidu.com/c/p/img?src=http://static.tieba.baidu.com/tb/editor/images/qw_cat_small/qw_cat_0007.gif&width=720&height=720&qulity=60&first_gif=1&imgtype=0",
+      "type": 3,
+      "bsize": "200,200",
+      "cdn_src": "http://c.tieba.baidu.com/c/p/img?src=http://static.tieba.baidu.com/tb/editor/images/qw_cat_small/qw_cat_0007.gif&width=720&height=720&qulity=60&first_gif=1&imgtype=0",
+      "big_cdn_src": "http://c.tieba.baidu.com/c/p/img?src=http://static.tieba.baidu.com/tb/editor/images/qw_cat_small/qw_cat_0007.gif&width=1920&height=640&qulity=100&first_gif=0&imgtype=0",
+      "is_long_pic": 0
+    }
+  ],
+  "image_url": "http://static.tieba.baidu.com/tb/editor/images/qw_cat_small/qw_cat_0007.gif"
+}

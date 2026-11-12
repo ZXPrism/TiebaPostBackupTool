@@ -77,6 +77,20 @@ function link(value: unknown, field: string): string {
     return escape(url.href);
 }
 
+function original_image(item: RecordValue): string {
+    if (item.origin_src !== undefined && item.origin_src !== null && item.origin_src !== '') {
+        return link(item.origin_src, 'content.origin_src');
+    }
+    // Some legacy images omit origin_src but retain it in the mobile proxy URL.
+    // Use the supplied original, preserving GIF animation instead of a proxy thumbnail.
+    const proxy = new URL(text(item.big_cdn_src, 'content.big_cdn_src'));
+    if (!['http:', 'https:'].includes(proxy.protocol) || proxy.hostname !== 'c.tieba.baidu.com'
+        || proxy.pathname !== '/c/p/img' || proxy.port || proxy.username || proxy.password) {
+        throw new Error('接口图片缺少 origin_src，且 big_cdn_src 不是已知的贴吧图片代理地址');
+    }
+    return link(proxy.searchParams.get('src'), 'content.big_cdn_src.src');
+}
+
 // Legacy PC UeditorEmotion configuration: prefix + two-digit index, GIF images.
 // Source: https://tb1.bdstatic.com/tb/_/ueditor_emotion_a903913.js
 const legacy_emoticons = [
@@ -91,6 +105,12 @@ const legacy_emoticons = [
 ];
 
 function emoticon_url(name: string): string {
+    const editor = name.match(/^image_editoricon([1-9]\d?)$/);
+    if (editor && Number(editor[1]) <= 50) {
+        // Original mobile GIF resources, also used by legacy PC reply HTML.
+        // Verified IDs 1–50; newer IDs do not use this resource path.
+        return `https://tb2.bdstatic.com/tb/editor/images/wise/smart/${name}.gif`;
+    }
     const face = name.match(/^i_f(\d{2})$/);
     if (face && Number(face[1]) >= 1 && Number(face[1]) <= 70) {
         // UeditorEmotion's default pack uses PNG, except IDs 51–70 use GIF
@@ -153,7 +173,7 @@ export function render_api_content(value: unknown, note?: (message: string) => v
             case 20: { // Meme images use src; their detail links are not part of the visible body.
                 const dimensions = text(item.bsize, 'content.bsize').match(/^(\d+),(\d+)$/);
                 if (!dimensions) { throw new Error('接口图片 bsize 格式无效'); }
-                const source = type === 20 ? link(item.src, 'content.src') : link(item.origin_src, 'content.origin_src');
+                const source = type === 20 ? link(item.src, 'content.src') : original_image(item);
                 return `<img class="${type === 20 ? 'BDE_Smiley' : 'BDE_Image'}" src="${source}" width="${dimensions[1]}" height="${dimensions[2]}">`;
             }
             case 11: {

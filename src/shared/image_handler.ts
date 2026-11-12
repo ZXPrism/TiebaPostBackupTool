@@ -46,14 +46,10 @@ export class ImageHandler {
      * Get file extension from URL.
      */
     private _get_extension(url: string): string {
-        // Handle Baidu tieba emoji URLs (usually .png)
-        if (url.includes('static.tieba.baidu.com')) {
-            return 'png';
-        }
-
-        // Extract extension from URL
+        // Preserve explicit extensions, including legacy Tieba GIF emoticons.
         const match = url.match(/\.([a-z]{3,4})(?:\?|$)/i);
-        return match ? match[1] : 'jpg';
+        if (match) { return match[1]; }
+        return url.includes('static.tieba.baidu.com') ? 'png' : 'jpg';
     }
 
     /**

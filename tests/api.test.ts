@@ -252,6 +252,78 @@ test('shadow emoticons preserve mentions and animated images in nested replies',
     }
 });
 
+test('legacy mobile editor icons preserve original GIFs and adjacent text without a label or page fallback', async () => {
+    const { content, image_url } = JSON.parse(await readFile('tests/regression/api-editoricon-emoticon.json', 'utf8'));
+    const expected = `fox的重返人间我还在等第三部呢<img class="BDE_Smiley" width="30" height="30" changedsize="false" src="${image_url}">`;
+    assert.equal(render_api_content(content), expected, 'The API omits the emoji label but supplies its identifier');
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = content;
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const { request, calls } = replay(records);
+    const result = await collect_api(baseline.id, request, progress, signal);
+    assert.equal(calls.length, 5, 'No additional content request is needed for the image mapping');
+    const post = finalize_post(result.metadata, result.floors);
+    const filename = post.image_map?.[image_url];
+    assert(filename?.endsWith('.gif'));
+    const local = expected.replace(image_url, `./images/${filename}`);
+    assert.equal(post.floor_list[0].comment.content, local);
+    assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, local);
+    for (let id = 1; id <= 50; id++) {
+        const name = `image_editoricon${id}`;
+        assert(render_api_content([{ type: 2, text: name }]).includes(`/wise/smart/${name}.gif`));
+    }
+    for (const name of ['image_editoricon', 'image_editoricon0', 'image_editoricon51', 'image_editoricon66', 'image_editoricon129',
+        'image_editoricon01', 'image_editoricon030', 'Image_editoricon30', 'image_editoricon30.gif', 'image_editoricon30/../x', 'image_editoricon30" onerror="x']) {
+        assert.throws(() => render_api_content([{ type: 2, text: name }]), /尚未支持/);
+    }
+});
+
+test('legacy proxied images recover the supplied original when origin_src is missing and keep GIF filenames', async () => {
+    const { content, image_url } = JSON.parse(await readFile('tests/regression/api-proxied-image.json', 'utf8'));
+    const item = content[0];
+    const expected = `<img class="BDE_Image" src="${image_url}" width="200" height="200">`;
+    assert.equal(render_api_content(content), expected);
+    for (const origin_src of [undefined, null, '']) {
+        assert.equal(render_api_content([{ ...item, origin_src }]), expected);
+    }
+    assert.equal(render_api_content([{ ...item, big_cdn_src: `https://c.tieba.baidu.com/c/p/img?src=${encodeURIComponent(image_url)}&first_gif=0` }]), expected);
+    assert.equal(render_api_content([{ ...item, origin_src: 'https://imgsrc.baidu.com/original.jpg' }]), expected.replace(image_url, 'https://imgsrc.baidu.com/original.jpg'));
+    assert.throws(() => render_api_content([{ ...item, origin_src: 'javascript:alert(1)' }]), /不是 HTTP/);
+    for (const big_cdn_src of [undefined, '', 'https://example.com/c/p/img?src=' + image_url,
+        'https://c.tieba.baidu.com/wrong?src=' + image_url, 'https://user@c.tieba.baidu.com/c/p/img?src=' + image_url,
+        'https://c.tieba.baidu.com:8080/c/p/img?src=' + image_url, 'https://c.tieba.baidu.com/c/p/img',
+        'https://c.tieba.baidu.com/c/p/img?src=javascript:alert(1)']) {
+        assert.throws(() => render_api_content([{ ...item, big_cdn_src }]));
+    }
+    const records = structuredClone(fixtures);
+    (records[0].response.first_floor as Record<string, unknown>).content = content;
+    const nested = records[2].response.data as Record<string, unknown>;
+    (nested.post_list as Record<string, unknown>[])[0].content = content;
+    const result = await collect_api(baseline.id, replay(records).request, progress, signal);
+    const post = finalize_post(result.metadata, result.floors);
+    const filename = post.image_map?.[image_url];
+    assert(filename?.endsWith('.gif'), 'The static.tieba.baidu.com hostname must not force a GIF to use .png');
+    const local = expected.replace(image_url, `./images/${filename}`);
+    assert.equal(post.floor_list[0].comment.content, local);
+    assert.equal(post.floor_list.find(f => f.index === 21)?.sub_comment_list?.[0].content, local);
+    assert(!Object.keys(post.image_map || {}).some(url => url.includes('/c/p/img?')));
+    // Official pack: https://tb1.bdstatic.com/tb/_/interest_smiley_863907f.js
+    // Its 15 GIFs are available under cms; the older resource root has IDs 1–9.
+    for (const [root, count] of [
+        ['http://static.tieba.baidu.com/tb/editor/images/', 9],
+        ['http://tb2.bdstatic.com/tb/cms/commonsub/editor/images/', 15],
+    ] as const) {
+        for (let id = 1; id <= count; id++) {
+            const original = `${root}qw_cat_small/qw_cat_${String(id).padStart(4, '0')}.gif`;
+            const big_cdn_src = `http://c.tieba.baidu.com/c/p/img?src=${encodeURIComponent(original)}&first_gif=0`;
+            const html = expected.replace(image_url, original);
+            assert.equal(render_api_content([{ ...item, origin_src: original, big_cdn_src }]), html);
+            assert.equal(render_api_content([{ ...item, big_cdn_src }]), html);
+        }
+    }
+});
+
 test('recorded meme image preserves the body source and dimensions in floors and nested replies', async () => {
     const { content } = JSON.parse(await readFile('tests/regression/api-meme-content.json', 'utf8'));
     const item = content[0];

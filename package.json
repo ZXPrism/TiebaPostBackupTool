@@ -1,6 +1,6 @@
 {
   "name": "tiebapostbackuptool",
-  "version": "3.0.9",
+  "version": "3.0.10",
   "description": "Automatically backup tieba posts in a single click",
   "main": "src/plugin/main.ts",
   "type": "module",
